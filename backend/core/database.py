@@ -1,5 +1,6 @@
 from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import DeclarativeBase, sessionmaker, Session
+from sqlalchemy.pool import NullPool
 from typing import Generator
 from backend.core.config import settings
 
@@ -18,9 +19,15 @@ def _set_wal_mode(dbapi_connection, connection_record):
 
 def create_db_engine():
     settings.ensure_dirs()
+    # NullPool: a fresh SQLite connection per checkout, closed on release.
+    # SQLite connections are essentially free (no network handshake) and WAL
+    # mode lets many readers run concurrently — so pooling buys nothing and a
+    # bounded QueuePool causes outages under fan-out loads (e.g. a page that
+    # fires dozens of parallel cover/list requests while two users are active).
     engine = create_engine(
         f"sqlite:///{settings.db_path}",
         connect_args={"check_same_thread": False},
+        poolclass=NullPool,
     )
     event.listen(engine, "connect", _set_wal_mode)
     return engine

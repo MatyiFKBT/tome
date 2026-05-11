@@ -112,7 +112,7 @@ def list_books(
     q: Optional[str] = Query(None, description="Full-text search across title/author/series/tags"),
     skip: int = Query(0, ge=0),
     limit: int = Query(200, ge=1, le=500),
-    sort: str = Query("title", pattern="^(title|author|year|added_at)$"),
+    sort: str = Query("title", pattern="^(title|author|year|added_at|status_updated)$"),
     order: str = Query("asc", pattern="^(asc|desc)$"),
     series: Optional[str] = Query(None, description="Exact series name filter"),
     no_series: Optional[bool] = Query(None, description="Filter to books with no series"),
