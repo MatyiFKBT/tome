@@ -377,10 +377,18 @@ export default function ReaderPage() {
   const [isComic, setIsComic] = useState(false)
   const [comicTotalPages, setComicTotalPages] = useState(0)
   const [comicCurrentPage, setComicCurrentPage] = useState(0)
-  const [isRTL, setIsRTL] = useState(false)
-  const [fitMode, setFitMode] = useState<FitMode>('width')
-  const [comicMode, setComicMode] = useState<ComicMode>('page')
-  const [spread, setSpread] = useState(() => typeof window !== 'undefined' && window.innerWidth >= 768)
+  const [isRTL, setIsRTL] = useState(() => localStorage.getItem('reader_comic_rtl') === '1')
+  const [fitMode, setFitMode] = useState<FitMode>(
+    () => (localStorage.getItem('reader_comic_fit') as FitMode) ?? 'width'
+  )
+  const [comicMode, setComicMode] = useState<ComicMode>(
+    () => (localStorage.getItem('reader_comic_mode') as ComicMode) ?? 'page'
+  )
+  const [spread, setSpread] = useState(() => {
+    const stored = localStorage.getItem('reader_comic_spread')
+    if (stored === '0' || stored === '1') return stored === '1'
+    return typeof window !== 'undefined' && window.innerWidth >= 768
+  })
   const [showToolbar, setShowToolbar] = useState(true)
   const [showThumbnails, setShowThumbnails] = useState(false)
   const toolbarTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -393,15 +401,26 @@ export default function ReaderPage() {
   const initialCfi = useRef<string | null>(null)
   const readyToSave = useRef(false)
 
+  // Persist comic reader preferences so they carry across chapters.
+  useEffect(() => { localStorage.setItem('reader_comic_rtl', isRTL ? '1' : '0') }, [isRTL])
+  useEffect(() => { localStorage.setItem('reader_comic_fit', fitMode) }, [fitMode])
+  useEffect(() => { localStorage.setItem('reader_comic_mode', comicMode) }, [comicMode])
+  useEffect(() => { localStorage.setItem('reader_comic_spread', spread ? '1' : '0') }, [spread])
+
   // ── Save progress (debounced) ────────────────────────────────────────────────
+  //
+  // Pages are 0-indexed (0..total-1); progress is 1-based so the last page = 100%.
+  // When on the last page, persist status='read' directly instead of relying on
+  // a second call — otherwise the debounced save can overwrite the completion.
 
   const saveProgress = useCallback((page: number, total: number) => {
-    if (!bookId) return
+    if (!bookId || total <= 0) return
     if (saveTimer.current) clearTimeout(saveTimer.current)
+    const isLastPage = page >= total - 1
+    const fraction = isLastPage ? 1 : (page + 1) / total
     saveTimer.current = setTimeout(() => {
-      const fraction = total > 0 ? page / total : 0
       api.put(`/books/${bookId}/status`, {
-        status: 'reading',
+        status: isLastPage ? 'read' : 'reading',
         progress_pct: fraction,
         cfi: `comic:${page}`,
       }).catch(() => {})
@@ -409,7 +428,8 @@ export default function ReaderPage() {
   }, [bookId])
 
   const handleComicReadComplete = useCallback(() => {
-    if (!bookId) return
+    if (!bookId || comicTotalPages <= 0) return
+    if (saveTimer.current) clearTimeout(saveTimer.current)
     api.put(`/books/${bookId}/status`, {
       status: 'read',
       progress_pct: 1,
@@ -417,17 +437,21 @@ export default function ReaderPage() {
     }).catch(() => {})
   }, [bookId, comicTotalPages])
 
+  // 1-based progress so the last page (index total-1) reads as 100%.
+  const comicPctFor = (page: number, total: number) =>
+    total > 0 ? Math.min(100, Math.round(((page + 1) / total) * 100)) : 0
+
   // Track progress whenever comicCurrentPage changes
   useEffect(() => {
     if (!isComic || comicTotalPages === 0) return
-    setProgress(Math.round((comicCurrentPage / comicTotalPages) * 100))
+    setProgress(comicPctFor(comicCurrentPage, comicTotalPages))
     saveProgress(comicCurrentPage, comicTotalPages)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [comicCurrentPage, comicTotalPages, isComic])
 
   const handleComicProgress = useCallback((page: number, total: number) => {
     setComicCurrentPage(page)
-    setProgress(total > 0 ? Math.round((page / total) * 100) : 0)
+    setProgress(comicPctFor(page, total))
   }, [])
 
   // ── Toolbar auto-hide for comic mode ────────────────────────────────────────
@@ -497,7 +521,7 @@ export default function ReaderPage() {
             } catch { /* ignore */ }
           }
           setComicCurrentPage(savedPage)
-          setProgress(pagesData.total > 0 ? Math.round((savedPage / pagesData.total) * 100) : 0)
+          setProgress(comicPctFor(savedPage, pagesData.total))
         } catch (e: unknown) {
           setLoadError(`Failed to load comic pages: ${(e as Error).message}`)
           setLoading(false)
