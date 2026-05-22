@@ -1,0 +1,29 @@
+# Run Tome from the published container image. Works on any host
+# (Linux / macOS / Windows) for amd64 and arm64.
+#
+#   docker compose pull && docker compose up -d
+#
+# Customise the volume paths below if your library and data live elsewhere.
+# See docs/examples/ for setups specific to Unraid, etc.
+services:
+  tome:
+    image: ghcr.io/bndct-devops/tome:latest
+    container_name: tome
+    ports:
+      - "8080:8080"
+    volumes:
+      # State (SQLite DB, cover cache, generated secret key)
+      - ./data:/data
+      # Your ebook library. Read-write so Tome can organise files.
+      - ./books:/books
+      # Drop new files here for Bindery to pick up
+      - ./bindery:/bindery
+    environment:
+      # Optional. If unset, Tome generates a long random key on first start
+      # and saves it to /data/secret.key.
+      # - TOME_SECRET_KEY=
+      # Optional. Get a free API token at https://hardcover.app/account/api
+      # - TOME_HARDCOVER_TOKEN=
+      # Optional. Set to true to automatically import files from /bindery.
+      # - TOME_AUTO_IMPORT=true
+    restart: unless-stopped

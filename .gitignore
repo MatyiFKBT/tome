@@ -41,8 +41,9 @@ Thumbs.db
 # Scribe
 .scribe-state.json
 
-# Docker (use docker-compose.example.yml as template)
-docker-compose.yml
+# Docker — docker-compose.yml is the canonical portable one (tracked).
+# Use docker-compose.override.yml for any local-only customisations
+# (it's auto-merged by docker compose).
 docker-compose.override.yml
 
 # Local dev docs and scratch files

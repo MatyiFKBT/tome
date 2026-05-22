@@ -51,17 +51,18 @@ Tome works as a PWA on mobile. Pin it to your home screen for a native app feel.
 
 ```bash
 docker run -d \
+  --name tome \
+  --restart unless-stopped \
   -p 8080:8080 \
-  -v /path/to/data:/data \
-  -v /path/to/ebooks:/books:ro \
-  -v /path/to/bindery:/bindery \
-  -e TOME_SECRET_KEY=changeme \
-  ghcr.io/bndct-devops/tome
+  -v ./data:/data \
+  -v ./books:/books \
+  -v ./bindery:/bindery \
+  ghcr.io/bndct-devops/tome:latest
 ```
 
 Open `http://localhost:8080` and follow the setup wizard to create your admin account.
 
-Or use Docker Compose -- copy `docker-compose.example.yml`, edit the values, and `docker compose up -d`.
+Or with Docker Compose -- the canonical `docker-compose.yml` in this repo is portable; clone and `docker compose up -d`. See `docs/examples/` for setups specific to Unraid and similar.
 
 ### Volumes
 
