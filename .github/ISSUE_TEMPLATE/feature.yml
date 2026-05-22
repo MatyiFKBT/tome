@@ -1,0 +1,43 @@
+name: Feature request
+description: Suggest a new feature or improvement
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the idea. The most useful feature requests describe the
+        *problem* first, not just the proposed solution.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you trying to solve?
+      description: |
+        What can't you do today? What's the current workaround (if any)?
+        Examples: "I can't tell which books I've finished this year",
+        "I want to share a library with my partner without giving them
+        admin rights".
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Your proposed solution (optional)
+      description: If you have an idea for how Tome should solve it, describe here.
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you've considered
+      description: Other tools, configs, or workflows that didn't quite work.
+
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope
+      options:
+        - label: I checked existing issues and the roadmap for duplicates
+          required: true
+        - label: This is for Tome itself (not the KOReader plugin, Scribe, or third-party integrations)
+          required: false

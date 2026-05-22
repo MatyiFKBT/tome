@@ -1,0 +1,73 @@
+name: Bug report
+description: Something's broken in Tome
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug. **Please don't use this
+        template for security issues** — see [SECURITY.md](https://github.com/bndct-devops/tome/blob/main/SECURITY.md)
+        for responsible disclosure.
+
+  - type: input
+    id: version
+    attributes:
+      label: Tome version
+      description: Hit `/api/health` or check the About section in Settings.
+      placeholder: "0.2.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: How are you running Tome?
+      options:
+        - Docker (single container)
+        - Docker Compose
+        - Unraid
+        - Bare metal / development
+        - Other (describe below)
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Plain description of the bug — what you did, what you expected, what actually happened.
+      placeholder: |
+        Steps to reproduce:
+        1. ...
+        2. ...
+        3. ...
+
+        Expected: ...
+        Actually: ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs or screenshots
+      description: |
+        Container logs (`docker logs tome`), browser console, network tab.
+        **Sanitise any tokens or secrets before pasting.**
+      render: shell
+
+  - type: input
+    id: browser
+    attributes:
+      label: Browser / device (for UI bugs)
+      placeholder: "Safari 18 on iPhone 14"
+
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Confirmations
+      options:
+        - label: I checked existing issues for duplicates
+          required: true
+        - label: This is not a security vulnerability (those go to SECURITY.md)
+          required: true

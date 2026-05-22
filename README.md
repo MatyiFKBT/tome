@@ -1,5 +1,10 @@
 # Tome
 
+[![Build](https://github.com/bndct-devops/tome/actions/workflows/docker.yml/badge.svg)](https://github.com/bndct-devops/tome/actions/workflows/docker.yml)
+[![Release](https://img.shields.io/github/v/release/bndct-devops/tome?include_prereleases&sort=semver)](https://github.com/bndct-devops/tome/releases)
+[![License](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
+[![Container](https://img.shields.io/badge/ghcr.io-bndct--devops%2Ftome-blue?logo=docker)](https://github.com/bndct-devops/tome/pkgs/container/tome)
+
 A self-hosted ebook library server that knows how you read -- not just what you own.
 
 Most library servers stop at file management. Tome connects to your e-reader via a custom [KOReader](https://koreader.rocks) plugin, records every reading session with page-level granularity, syncs positions bidirectionally between device and browser, and turns all of it into stats that get sharper the more you read.
@@ -23,6 +28,22 @@ Built with FastAPI, React, and SQLite. Ships as a single Docker image.
 - **Themes** -- 3 built-in (light, dark, amber) plus fully custom themes via 10-value hex palette
 
 Plus: series browsing with story arcs and publication status, bulk operations, libraries with icons, shelves (saved filters), Quick Connect (6-char code sign-in), OPDS PINs (e-ink-friendly passwords), role-based access control, per-user book visibility, user-level API tokens, audit logging, and a bulk import script. [Full feature list](docs/features.md)
+
+## How is Tome different?
+
+There are several self-hosted ebook tools — here's where Tome sits.
+
+| | Tome | Calibre-Web | Komga | Kavita |
+|---|---|---|---|---|
+| **Reading session tracking** (time, pace, streaks from your e-reader) | ✅ via TomeSync plugin | ❌ | ❌ | ❌ |
+| **Bidirectional position sync** with KOReader | ✅ | partial (KOSync) | ❌ | partial |
+| **Built-in EPUB + manga reader** | ✅ | ✅ | manga only | ✅ |
+| **Stats / reading insights** | ✅ rich | minimal | minimal | minimal |
+| **Single-binary deploy** | ✅ Docker, FastAPI + SQLite | requires Calibre install | ✅ | ✅ |
+| **Comics & novels in one place** | ✅ | EPUB-focused | comics-focused | ✅ |
+| **Maturity** | new (v0.2) | mature, dated UI | mature | mature |
+
+Pick **Calibre-Web** if you want the largest ecosystem and don't mind the dated UI. **Komga** if you're comics/manga-only. **Kavita** if you want a featureful all-rounder. **Tome** if reading-session tracking and KOReader integration are what you actually want — that's what it's built around.
 
 ![Dashboard](docs/screenshots/dashboard.png)
 *Filter, sort, and browse your library. Bulk select for metadata edits, library assignment, or export.*
@@ -110,7 +131,7 @@ Requirements: Python 3.12+, Node.js 18+
 | Styling | Tailwind CSS 4 |
 | Auth | JWT (python-jose) |
 
-Built with [Claude Code](https://claude.ai/code).
+See [CONTRIBUTING.md](CONTRIBUTING.md) for project conventions and PR guidelines.
 
 ## Documentation
 
@@ -126,6 +147,7 @@ Built with [Claude Code](https://claude.ai/code).
 - [KOReader](https://koreader.rocks) -- the open source e-reader app that Tome's sync plugin and OPDS integration are built for
 - [Hardcover](https://hardcover.app) -- book metadata and cover art API
 - [foliate-js](https://github.com/johnfactotum/foliate-js) -- the EPUB rendering engine powering Tome's built-in reader
+- Substantial portions of Tome were developed in collaboration with [Claude Code](https://claude.ai/code)
 
 ## License
 
