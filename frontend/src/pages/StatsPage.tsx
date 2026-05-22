@@ -21,6 +21,7 @@ import { SeriesCompletionGrid } from '@/components/stats/SeriesCompletionGrid'
 import { AuthorAffinity } from '@/components/stats/AuthorAffinity'
 import { CompletionByType } from '@/components/stats/CompletionByType'
 import { LibraryGrowthChart } from '@/components/stats/LibraryGrowthChart'
+import { SyncStatusBadge } from '@/components/SyncStatusBadge'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -526,7 +527,9 @@ export function StatsPage() {
           </Link>
           <BarChart3 className="w-4 h-4 text-muted-foreground" />
           <span className="text-sm font-semibold">Reading Stats</span>
-          <div className="ml-auto flex items-center gap-1 bg-muted rounded-lg p-0.5">
+          <div className="ml-auto flex items-center gap-2">
+            <SyncStatusBadge />
+            <div className="flex items-center gap-1 bg-muted rounded-lg p-0.5">
             {RANGES.map(r => (
               <button
                 key={r.days}
@@ -541,6 +544,7 @@ export function StatsPage() {
                 {r.label}
               </button>
             ))}
+            </div>
           </div>
         </div>
         <div className="overflow-x-auto border-t border-border/50">

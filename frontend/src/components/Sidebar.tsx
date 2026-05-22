@@ -403,7 +403,7 @@ export function Sidebar({ libraries, savedFilters, activeTab, onLibrariesChange,
               <button
                 onClick={onOpenHomeView}
                 className={cn(
-                  'group flex items-center gap-2 w-full px-2 py-1.5 rounded-lg text-sm transition-all',
+                  'group flex items-center gap-2 w-full px-2 py-1.5 rounded-lg text-sm transition-all touch-feedback',
                   isHomeTab
                     ? 'bg-primary/10 text-primary font-medium'
                     : 'text-muted-foreground hover:text-foreground hover:bg-muted'
@@ -415,7 +415,7 @@ export function Sidebar({ libraries, savedFilters, activeTab, onLibrariesChange,
               <button
                 onClick={selectAllBooks}
                 className={cn(
-                  'group flex items-center gap-2 w-full px-2 py-1.5 rounded-lg text-sm transition-all',
+                  'group flex items-center gap-2 w-full px-2 py-1.5 rounded-lg text-sm transition-all touch-feedback',
                   isAllBooks
                     ? 'bg-primary/10 text-primary font-medium'
                     : 'text-muted-foreground hover:text-foreground hover:bg-muted'
@@ -427,7 +427,7 @@ export function Sidebar({ libraries, savedFilters, activeTab, onLibrariesChange,
               <button
                 onClick={onOpenSeriesView}
                 className={cn(
-                  'group flex items-center gap-2 w-full px-2 py-1.5 rounded-lg text-sm transition-all',
+                  'group flex items-center gap-2 w-full px-2 py-1.5 rounded-lg text-sm transition-all touch-feedback',
                   isSeriesTab
                     ? 'bg-primary/10 text-primary font-medium'
                     : 'text-muted-foreground hover:text-foreground hover:bg-muted'
@@ -439,7 +439,7 @@ export function Sidebar({ libraries, savedFilters, activeTab, onLibrariesChange,
               <Link
                 to="/stats"
                 className={cn(
-                  'group flex items-center gap-2 w-full px-2 py-1.5 rounded-lg text-sm transition-all',
+                  'group flex items-center gap-2 w-full px-2 py-1.5 rounded-lg text-sm transition-all touch-feedback',
                   location.pathname === '/stats'
                     ? 'bg-primary/10 text-primary font-medium'
                     : 'text-muted-foreground hover:text-foreground hover:bg-muted'
@@ -452,7 +452,7 @@ export function Sidebar({ libraries, savedFilters, activeTab, onLibrariesChange,
                 <Link
                   to="/bindery"
                   className={cn(
-                    'group flex items-center gap-2 w-full px-2 py-1.5 rounded-lg text-sm transition-all',
+                    'group flex items-center gap-2 w-full px-2 py-1.5 rounded-lg text-sm transition-all touch-feedback',
                     location.pathname === '/bindery'
                       ? 'bg-primary/10 text-primary font-medium'
                       : 'text-muted-foreground hover:text-foreground hover:bg-muted'
@@ -566,7 +566,7 @@ export function Sidebar({ libraries, savedFilters, activeTab, onLibrariesChange,
                 <button
                   onClick={() => { onOpenHomeView(); onMobileClose() }}
                   className={cn(
-                    'group flex items-center gap-2 w-full px-2 py-2.5 rounded-lg text-sm transition-all',
+                    'group flex items-center gap-2 w-full px-2 py-2.5 rounded-lg text-sm transition-all touch-feedback',
                     isHomeTab
                       ? 'bg-primary/10 text-primary font-medium'
                       : 'text-muted-foreground hover:text-foreground hover:bg-muted'
@@ -578,7 +578,7 @@ export function Sidebar({ libraries, savedFilters, activeTab, onLibrariesChange,
                 <button
                   onClick={() => { selectAllBooks(); onMobileClose() }}
                   className={cn(
-                    'group flex items-center gap-2 w-full px-2 py-2.5 rounded-lg text-sm transition-all',
+                    'group flex items-center gap-2 w-full px-2 py-2.5 rounded-lg text-sm transition-all touch-feedback',
                     isAllBooks
                       ? 'bg-primary/10 text-primary font-medium'
                       : 'text-muted-foreground hover:text-foreground hover:bg-muted'
@@ -590,7 +590,7 @@ export function Sidebar({ libraries, savedFilters, activeTab, onLibrariesChange,
                 <button
                   onClick={() => { onOpenSeriesView(); onMobileClose() }}
                   className={cn(
-                    'group flex items-center gap-2 w-full px-2 py-2.5 rounded-lg text-sm transition-all',
+                    'group flex items-center gap-2 w-full px-2 py-2.5 rounded-lg text-sm transition-all touch-feedback',
                     isSeriesTab
                       ? 'bg-primary/10 text-primary font-medium'
                       : 'text-muted-foreground hover:text-foreground hover:bg-muted'
@@ -603,7 +603,7 @@ export function Sidebar({ libraries, savedFilters, activeTab, onLibrariesChange,
                   to="/stats"
                   onClick={onMobileClose}
                   className={cn(
-                    'group flex items-center gap-2 w-full px-2 py-2.5 rounded-lg text-sm transition-all',
+                    'group flex items-center gap-2 w-full px-2 py-2.5 rounded-lg text-sm transition-all touch-feedback',
                     location.pathname === '/stats'
                       ? 'bg-primary/10 text-primary font-medium'
                       : 'text-muted-foreground hover:text-foreground hover:bg-muted'

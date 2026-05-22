@@ -135,6 +135,11 @@
   --spring: cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
+/* Suppress iOS's default gray tap flash globally — we provide explicit :active feedback */
+html {
+  -webkit-tap-highlight-color: transparent;
+}
+
 /* Touch feedback for interactive elements */
 .touch-feedback {
   transition: transform 0.2s var(--spring);

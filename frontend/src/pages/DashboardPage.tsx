@@ -16,6 +16,7 @@ import { SaveFilterButton } from '@/components/SaveFilterButton'
 import { AutocompleteInput } from '@/components/AutocompleteInput'
 import { UploadModal } from '@/components/UploadModal'
 import { ManageSeriesModal } from '@/components/ManageSeriesModal'
+import { SyncStatusBadge } from '@/components/SyncStatusBadge'
 import { api } from '@/lib/api'
 import type { Book, Library, SavedFilter, ReadingStatus, Arc, SeriesMeta, SeriesStatus } from '@/lib/books'
 import { formatBytes } from '@/lib/books'
@@ -888,6 +889,7 @@ export function DashboardPage() {
             )}
           </div>
           <div className="flex items-center gap-1.5 ml-auto">
+            <SyncStatusBadge />
             {isMember(user) && (
               <button onClick={() => setUploadModalOpen(true)}
                 className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium border border-border bg-card hover:bg-muted transition-all touch-feedback">
