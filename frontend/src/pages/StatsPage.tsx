@@ -526,7 +526,7 @@ export function StatsPage() {
             <ArrowLeft className="w-4 h-4" />
           </Link>
           <BarChart3 className="w-4 h-4 text-muted-foreground" />
-          <span className="text-sm font-semibold">Reading Stats</span>
+          <span className="text-sm font-semibold hidden sm:inline">Reading Stats</span>
           <div className="ml-auto flex items-center gap-2">
             <SyncStatusBadge />
             <div className="flex items-center gap-1 bg-muted rounded-lg p-0.5">

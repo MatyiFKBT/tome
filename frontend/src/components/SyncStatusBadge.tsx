@@ -48,12 +48,12 @@ export function SyncStatusBadge() {
 
   return (
     <div
-      title={tooltip}
-      className="inline-flex items-center gap-1.5 px-2 h-7 rounded-md text-xs text-muted-foreground hover:text-foreground hover:bg-muted transition-colors cursor-default select-none"
-      aria-label={`KOReader sync: ${label}`}
+      title={`${label} — ${tooltip}`}
+      className="inline-flex items-center gap-1.5 h-7 px-1.5 sm:px-2 rounded-md text-xs text-muted-foreground hover:text-foreground hover:bg-muted transition-colors cursor-default select-none"
+      aria-label={`KOReader sync: ${label}. ${tooltip}`}
     >
-      <span className={cn('w-1.5 h-1.5 rounded-full', dotColor(diff))} />
-      <span className="font-medium tabular-nums">{label}</span>
+      <span className={cn('w-2 h-2 sm:w-1.5 sm:h-1.5 rounded-full', dotColor(diff))} />
+      <span className="font-medium tabular-nums hidden sm:inline">{label}</span>
     </div>
   )
 }
