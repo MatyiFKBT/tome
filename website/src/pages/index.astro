@@ -4,6 +4,8 @@ import SiteHeader from '../components/SiteHeader.astro'
 import { ThemedShot } from '../components/ThemedShot'
 import { RevealOnScroll } from '../components/RevealOnScroll'
 import { CopyButton } from '../components/CopyButton'
+import { ThemePickerRow } from '../components/mockups/ThemePickerRow'
+import { HeatmapFillIn } from '../components/mockups/HeatmapFillIn'
 
 const shipCommand = `docker run -d \\
   --name tome \\
@@ -13,24 +15,6 @@ const shipCommand = `docker run -d \\
   -v ./books:/books \\
   -v ./bindery:/bindery \\
   ghcr.io/bndct-devops/tome:latest`
-
-const features = [
-  {
-    name: 'home',
-    title: 'A home that knows your habits',
-    body: 'Continue where you left off, see your streak, glance at what just landed in the library. Built from real reading-session data — not just file metadata.',
-  },
-  {
-    name: 'series-detail',
-    title: 'Series, not just files',
-    body: 'Manga, light novels, multi-volume sagas — Tome groups volumes into arcs, tracks progress per book, and remembers which arc you finished. Status badges show ongoing vs completed.',
-  },
-  {
-    name: 'stats-overview',
-    title: 'Stats that get sharper the more you read',
-    body: 'Streaks, time-of-day heatmaps, reading pace, completion estimates. Every minute on your e-reader feeds back into actionable insight, not vanity metrics.',
-  },
-]
 
 // Comparison data — cells are one of: 'yes' | 'no' | 'partial' | string (custom text)
 // Fact-checked against current docs: Kavita 2-way KOReader sync (v0.8.7+),
@@ -62,8 +46,8 @@ const competitors = [
   <!-- Hero -->
   <section class="relative max-w-6xl mx-auto px-6 pt-32 pb-24 text-center">
     <div class="accent-glow"></div>
-    <p class="reveal inline-block px-3 py-1 mb-6 rounded-full text-xs font-medium bg-[var(--card)] border text-[var(--muted)]">
-      v0.2 · early release · self-hosted
+    <p class="reveal inline-block px-3 py-1 mb-6 rounded-full text-xs font-medium bg-[var(--accent-soft)] border border-[var(--accent)]/40 text-[var(--accent)]">
+      v1.0 · Codex · self-hosted
     </p>
     <h1 class="reveal text-5xl md:text-7xl font-bold tracking-tight mb-6 max-w-4xl mx-auto leading-[1.05]">
       A self-hosted ebook library that <span class="text-[var(--accent)]">knows how you read</span>.
@@ -84,103 +68,160 @@ const competitors = [
     <div class="reveal max-w-5xl mx-auto screenshot-card rounded-xl overflow-hidden border shadow-2xl shadow-[var(--accent-soft)]">
       <ThemedShot name="home" alt="Tome home screen" client:load className="w-full block" />
     </div>
-    <p class="reveal mt-4 text-sm text-[var(--muted)]">Click any screenshot to zoom · use the theme switcher above to flip every shot.</p>
+    <p class="reveal mt-4 text-sm text-[var(--muted)]">Click any screenshot to zoom · toggle theme in the header at any time.</p>
   </section>
 
-  <!-- Features (with TomeSync section inserted between the first feature and the rest) -->
-  {features.map((feat, i) => (
-    <>
-      <section class="max-w-6xl mx-auto px-6 py-24">
-        <div class={`grid md:grid-cols-2 gap-12 items-center ${i % 2 === 1 ? 'md:[&>*:first-child]:order-2' : ''}`}>
-          <div class="reveal">
-            <h2 class="text-3xl md:text-5xl font-bold tracking-tight mb-5">{feat.title}</h2>
-            <p class="text-lg md:text-xl text-[var(--muted)] leading-relaxed">{feat.body}</p>
-          </div>
-          <div class="reveal screenshot-card rounded-xl overflow-hidden border bg-[var(--card)] shadow-xl">
-            <ThemedShot name={feat.name} alt={feat.title} client:load className="w-full block" />
-          </div>
+  <!-- Feature 1: home / continuity -->
+  <section class="max-w-6xl mx-auto px-6 py-24">
+    <div class="grid md:grid-cols-2 gap-12 items-center">
+      <div class="reveal">
+        <h2 class="text-3xl md:text-5xl font-bold tracking-tight mb-5">A home that knows your habits.</h2>
+        <p class="text-lg md:text-xl text-[var(--muted)] leading-relaxed">
+          Continue where you left off, see your streak, glance at what just landed in the library.
+          Built from real reading-session data — not just file metadata.
+        </p>
+      </div>
+      <div class="reveal screenshot-card rounded-xl overflow-hidden border bg-[var(--card)] shadow-xl">
+        <ThemedShot name="home" alt="Tome home screen" client:load className="w-full block" />
+      </div>
+    </div>
+  </section>
+
+  <!-- TomeSync — kept between feature 1 and 2 -->
+  <section class="max-w-6xl mx-auto px-6 py-24">
+    <div class="text-center mb-12 reveal">
+      <span class="inline-block px-3 py-1 mb-4 rounded-full text-xs font-medium bg-[var(--accent-soft)] text-[var(--accent)] uppercase tracking-wide">TomeSync</span>
+      <h2 class="text-3xl md:text-5xl font-bold tracking-tight mb-4">30 seconds to KOReader sync.</h2>
+      <p class="text-lg md:text-xl text-[var(--muted)] max-w-2xl mx-auto leading-relaxed">
+        Other tools document how to set up KOSync. Tome ships a plugin pre-configured
+        with your server URL and a fresh API key — no manual entry, no account, no guessing.
+      </p>
+    </div>
+
+    <div class="grid md:grid-cols-2 gap-6 reveal max-w-4xl mx-auto">
+      <div class="setup-card setup-card-them">
+        <div class="setup-card-header">
+          <span class="setup-card-label">With KOSync (everyone else)</span>
         </div>
-      </section>
+        <ol class="setup-steps">
+          <li>Install the KOSync KOReader plugin</li>
+          <li>Open it, enter your server URL</li>
+          <li>Register a username</li>
+          <li>Enter and confirm a password</li>
+          <li>Configure auto-sync intervals</li>
+          <li>Hope the connection works</li>
+        </ol>
+      </div>
+      <div class="setup-card setup-card-us">
+        <div class="setup-card-header">
+          <span class="setup-card-label">With TomeSync</span>
+        </div>
+        <ol class="setup-steps">
+          <li>Click <strong>Download Plugin</strong> in Tome's Settings</li>
+          <li>Drop the <code>.koplugin</code> into KOReader's plugins folder</li>
+          <li>Restart KOReader. Done.</li>
+        </ol>
+        <div class="setup-card-footer">
+          Self-registers in the wrench menu. Server URL and API key are baked in.
+        </div>
+      </div>
+    </div>
 
-      {i === 0 && (
-        <!-- TomeSync: prominent break after the first feature -->
-        <section class="max-w-6xl mx-auto px-6 py-24">
-          <div class="text-center mb-12 reveal">
-            <span class="inline-block px-3 py-1 mb-4 rounded-full text-xs font-medium bg-[var(--accent-soft)] text-[var(--accent)] uppercase tracking-wide">TomeSync</span>
-            <h2 class="text-3xl md:text-5xl font-bold tracking-tight mb-4">30 seconds to KOReader sync.</h2>
-            <p class="text-lg md:text-xl text-[var(--muted)] max-w-2xl mx-auto leading-relaxed">
-              Other tools document how to set up KOSync. Tome ships a plugin pre-configured
-              with your server URL and a fresh API key — no manual entry, no account, no guessing.
-            </p>
-          </div>
+    <!-- Benefit cards: 2x2 grid -->
+    <div class="grid md:grid-cols-2 gap-4 mt-12 max-w-4xl mx-auto reveal">
+      <div class="rounded-xl border bg-[var(--card)] p-5">
+        <div class="font-semibold mb-1.5">Records sessions, not just position</div>
+        <p class="text-sm text-[var(--muted)] leading-relaxed">
+          Time on page, pages turned, device — every reading minute feeds your stats.
+          Plain KOSync only syncs where you stopped.
+        </p>
+      </div>
+      <div class="rounded-xl border bg-[var(--card)] p-5">
+        <div class="font-semibold mb-1.5">Browse and download series from KOReader</div>
+        <p class="text-sm text-[var(--muted)] leading-relaxed">
+          Open the wrench menu, pick a series, hit "Download rest". Files arrive
+          organised by book-type folder with proper filenames. No OPDS gymnastics.
+        </p>
+      </div>
+      <div class="rounded-xl border bg-[var(--card)] p-5">
+        <div class="font-semibold mb-1.5">Web reader and KOReader stay in lockstep</div>
+        <p class="text-sm text-[var(--muted)] leading-relaxed">
+          Read on the couch in the browser, pick up on KOReader in bed, come back
+          to the browser the next morning. Bidirectional. Offline-first — sessions
+          queue and flush when you're back online.
+        </p>
+      </div>
+      <div class="rounded-xl border bg-[var(--card)] p-5">
+        <div class="font-semibold mb-1.5">Stable book IDs, not file hashes</div>
+        <p class="text-sm text-[var(--muted)] leading-relaxed">
+          KOSync identifies books by MD5 of the file — edit metadata, re-save,
+          redownload and the sync history orphans. Tome resolves to a canonical
+          book ID. Your reading history survives file changes.
+        </p>
+      </div>
+    </div>
+  </section>
 
-          <div class="grid md:grid-cols-2 gap-6 reveal max-w-4xl mx-auto">
-            <div class="setup-card setup-card-them">
-              <div class="setup-card-header">
-                <span class="setup-card-label">With KOSync (everyone else)</span>
-              </div>
-              <ol class="setup-steps">
-                <li>Install the KOSync KOReader plugin</li>
-                <li>Open it, enter your server URL</li>
-                <li>Register a username</li>
-                <li>Enter and confirm a password</li>
-                <li>Configure auto-sync intervals</li>
-                <li>Hope the connection works</li>
-              </ol>
-            </div>
-            <div class="setup-card setup-card-us">
-              <div class="setup-card-header">
-                <span class="setup-card-label">With TomeSync</span>
-              </div>
-              <ol class="setup-steps">
-                <li>Click <strong>Download Plugin</strong> in Tome's Settings</li>
-                <li>Drop the <code>.koplugin</code> into KOReader's plugins folder</li>
-                <li>Restart KOReader. Done.</li>
-              </ol>
-              <div class="setup-card-footer">
-                Self-registers in the wrench menu. Server URL and API key are baked in.
-              </div>
-            </div>
-          </div>
+  <!-- Feature 2: series & arcs (keeps the static screenshot) -->
+  <section class="max-w-6xl mx-auto px-6 py-24">
+    <div class="grid md:grid-cols-2 gap-12 items-center">
+      <div class="reveal md:order-2">
+        <h2 class="text-3xl md:text-5xl font-bold tracking-tight mb-5">Series, not just files.</h2>
+        <p class="text-lg md:text-xl text-[var(--muted)] leading-relaxed">
+          Manga, light novels, multi-volume sagas — Tome groups volumes into arcs, tracks progress per book,
+          and remembers which arc you finished. Status badges show ongoing vs completed.
+        </p>
+      </div>
+      <div class="reveal screenshot-card rounded-xl overflow-hidden border bg-[var(--card)] shadow-xl md:order-1">
+        <ThemedShot name="series-detail" alt="Series detail with arcs" client:load className="w-full block" />
+      </div>
+    </div>
+  </section>
 
-          <!-- Benefit cards: 2x2 grid -->
-          <div class="grid md:grid-cols-2 gap-4 mt-12 max-w-4xl mx-auto reveal">
-            <div class="rounded-xl border bg-[var(--card)] p-5">
-              <div class="font-semibold mb-1.5">Records sessions, not just position</div>
-              <p class="text-sm text-[var(--muted)] leading-relaxed">
-                Time on page, pages turned, device — every reading minute feeds your stats.
-                Plain KOSync only syncs where you stopped.
-              </p>
-            </div>
-            <div class="rounded-xl border bg-[var(--card)] p-5">
-              <div class="font-semibold mb-1.5">Browse and download series from KOReader</div>
-              <p class="text-sm text-[var(--muted)] leading-relaxed">
-                Open the wrench menu, pick a series, hit "Download rest". Files arrive
-                organised by book-type folder with proper filenames. No OPDS gymnastics.
-              </p>
-            </div>
-            <div class="rounded-xl border bg-[var(--card)] p-5">
-              <div class="font-semibold mb-1.5">Web reader and KOReader stay in lockstep</div>
-              <p class="text-sm text-[var(--muted)] leading-relaxed">
-                Read on the couch in the browser, pick up on KOReader in bed, come back
-                to the browser the next morning. Bidirectional. Offline-first — sessions
-                queue and flush when you're back online.
-              </p>
-            </div>
-            <div class="rounded-xl border bg-[var(--card)] p-5">
-              <div class="font-semibold mb-1.5">Stable book IDs, not file hashes</div>
-              <p class="text-sm text-[var(--muted)] leading-relaxed">
-                KOSync identifies books by MD5 of the file — edit metadata, re-save,
-                redownload and the sync history orphans. Tome resolves to a canonical
-                book ID. Your reading history survives file changes.
-              </p>
-            </div>
-          </div>
-        </section>
-      )}
-    </>
-  ))}
+  <!-- Feature 3: stats -->
+  <section class="max-w-6xl mx-auto px-6 py-24">
+    <div class="grid md:grid-cols-2 gap-12 items-center">
+      <div class="reveal">
+        <h2 class="text-3xl md:text-5xl font-bold tracking-tight mb-5">Stats that get sharper the more you read.</h2>
+        <p class="text-lg md:text-xl text-[var(--muted)] leading-relaxed">
+          Streaks, time-of-day heatmaps, reading pace, completion estimates. Every minute on your e-reader
+          feeds back into actionable insight, not vanity metrics.
+        </p>
+      </div>
+      <div class="reveal screenshot-card rounded-xl overflow-hidden border bg-[var(--card)] shadow-xl">
+        <ThemedShot name="stats-overview" alt="Stats overview" client:load className="w-full block" />
+      </div>
+    </div>
+  </section>
 
+  <!-- 365-day heatmap moment -->
+  <section class="max-w-4xl mx-auto px-6 py-24">
+    <div class="text-center mb-10 reveal">
+      <span class="inline-block px-3 py-1 mb-4 rounded-full text-xs font-medium bg-[var(--accent-soft)] text-[var(--accent)] uppercase tracking-wide">365 days</span>
+      <h2 class="text-3xl md:text-5xl font-bold tracking-tight mb-4">A year of reading, at a glance.</h2>
+      <p class="text-lg md:text-xl text-[var(--muted)] max-w-2xl mx-auto leading-relaxed">
+        Every cell is a day. Every shade is how much you read. Recognise your patterns — the weekend deep-dives,
+        the late-night chapters, the dry spells.
+      </p>
+    </div>
+    <div class="reveal rounded-xl border bg-[var(--card)] shadow-xl">
+      <HeatmapFillIn client:load />
+    </div>
+  </section>
+
+  <!-- Theme picker -->
+  <section class="max-w-5xl mx-auto px-6 py-24">
+    <div class="text-center mb-12 reveal">
+      <h2 class="text-3xl md:text-5xl font-bold tracking-tight mb-4">Pick a theme. Read your way.</h2>
+      <p class="text-lg md:text-xl text-[var(--muted)] max-w-2xl mx-auto leading-relaxed">
+        Three themes built in — Light, Dark, Amber — plus custom palettes for the colour-coordinators.
+        Click below to try one. (Your choice carries into the docs too.)
+      </p>
+    </div>
+    <div class="reveal">
+      <ThemePickerRow client:load />
+    </div>
+  </section>
   <!-- Mobile / PWA — phone-frame trio -->
   <section class="max-w-6xl mx-auto px-6 py-24">
     <div class="text-center mb-16 reveal">

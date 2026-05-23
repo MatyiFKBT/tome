@@ -5,6 +5,7 @@ import DocsMeta from '../../components/DocsMeta.astro'
 import Callout from '../../components/Callout.astro'
 import Steps from '../../components/Steps.astro'
 import { ThemedShot } from '../../components/ThemedShot'
+import { RolesVisibilityDemo } from '../../components/mockups/RolesVisibilityDemo'
 import fs from 'node:fs'
 import path from 'node:path'
 const visibilitySvg = fs.readFileSync(path.resolve(process.cwd(), 'public/diagrams/visibility-rules.svg'), 'utf-8')
@@ -60,6 +61,15 @@ const visibilitySvg = fs.readFileSync(path.resolve(process.cwd(), 'public/diagra
   </p>
 
   <div class="docs-diagram" set:html={visibilitySvg} />
+
+  <h3>Try it</h3>
+  <p>
+    Toggle a role below — the book list filters in real time using the same rules the API enforces.
+    Note: server-side, this isn't just hidden in the UI; the API never returns the books you can't see.
+  </p>
+  <div class="docs-shot-bare">
+    <RolesVisibilityDemo client:load />
+  </div>
 
   <h3>The rules in words</h3>
   <ul>
