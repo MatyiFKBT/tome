@@ -7,6 +7,7 @@ import {
   Library as LibraryIcon, CheckSquare, XSquare, Download, Pencil, Menu,
   Flame, BookCheck, Clock, BookOpenCheck, Play, CheckCheck, Trash2, Settings2,
 } from 'lucide-react'
+import { TomeMark } from '@/components/TomeMark'
 import { useAuth, isMember, isAdmin } from '@/contexts/AuthContext'
 import { useToast } from '@/contexts/ToastContext'
 import { BookCard, type ViewMode } from '@/components/BookCard'
@@ -868,7 +869,7 @@ export function DashboardPage() {
             <Menu className="w-5 h-5" />
           </button>
           <div className="flex items-center gap-2 mr-2 shrink-0 group cursor-default">
-            <BookOpen className="w-5 h-5 text-primary transition-transform duration-300 group-hover:rotate-[-12deg] group-hover:scale-110" />
+            <TomeMark className="w-5 h-5 text-primary transition-transform duration-300 group-hover:rotate-[-12deg] group-hover:scale-110" strokeWidth={7} />
             <span className="font-semibold text-sm">Tome</span>
           </div>
           <div className="relative flex-1 sm:max-w-md">
