@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/screenshots/banner.png" alt="Tome — a self-hosted ebook library that knows how you read" />
+  <img src="docs/screenshots/home.png" alt="Tome dashboard — continue reading, series progress, recently finished" />
 </p>
 
 # Tome
@@ -16,9 +16,6 @@ Most library servers stop at file management. Tome connects to your e-reader via
 Built with FastAPI, React, and SQLite. Ships as a single Docker image.
 
 > **Early release** -- actively developed, expect rough edges.
-
-![Home](docs/screenshots/home.png)
-*Continue reading where you left off. Track streaks, pages, and reading time at a glance.*
 
 ## Highlights
 
