@@ -2,6 +2,7 @@
 import BaseLayout from '../layouts/BaseLayout.astro'
 import SiteHeader from '../components/SiteHeader.astro'
 import { ThemedShot } from '../components/ThemedShot'
+import { ThemedVideo } from '../components/ThemedVideo'
 import { RevealOnScroll } from '../components/RevealOnScroll'
 import { CopyButton } from '../components/CopyButton'
 import { ThemePickerRow } from '../components/mockups/ThemePickerRow'
@@ -66,10 +67,10 @@ const competitors = [
       </a>
     </div>
 
-    <div class="reveal max-w-5xl mx-auto screenshot-card rounded-xl overflow-hidden border shadow-2xl shadow-[var(--accent-soft)]">
-      <ThemedShot name="home" alt="Tome home screen" client:load className="w-full block" />
+    <div class="reveal max-w-5xl mx-auto rounded-xl overflow-hidden border shadow-2xl shadow-[var(--accent-soft)]">
+      <ThemedVideo name="hero" client:load className="w-full block" />
     </div>
-    <p class="reveal mt-4 text-sm text-[var(--muted)]">Click any screenshot to zoom · toggle theme in the header at any time.</p>
+    <p class="reveal mt-4 text-sm text-[var(--muted)]">Toggle theme in the header at any time · click any screenshot below to zoom.</p>
   </section>
 
   <!-- Feature 1: home / continuity -->
