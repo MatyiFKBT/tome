@@ -278,6 +278,32 @@ def post_session(
         session_uuid=body.session_uuid,
     )
     db.add(session)
+
+    # Keep UserBookStatus in sync — catches up when position PUTs failed
+    # but queued sessions flush later
+    if body.progress_end is not None:
+        pct = body.progress_end
+        status_row = (
+            db.query(UserBookStatus)
+            .filter(UserBookStatus.user_id == user.id, UserBookStatus.book_id == body.book_id)
+            .first()
+        )
+        if status_row:
+            if pct > (status_row.progress_pct or 0):
+                status_row.progress_pct = pct
+            if status_row.status == "unread" and pct > 0:
+                status_row.status = "reading"
+            elif pct >= 0.99:
+                status_row.status = "read"
+        else:
+            new_status = "read" if pct >= 0.99 else ("reading" if pct > 0 else "unread")
+            db.add(UserBookStatus(
+                user_id=user.id,
+                book_id=body.book_id,
+                status=new_status,
+                progress_pct=pct,
+            ))
+
     db.commit()
     db.refresh(session)
     return {"session_id": session.id}
