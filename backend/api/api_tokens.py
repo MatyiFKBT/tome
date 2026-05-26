@@ -24,14 +24,19 @@ router = APIRouter(prefix="/tokens", tags=["api-tokens"])
 # ── Schemas ───────────────────────────────────────────────────────────────────
 
 
+VALID_SCOPES = ("full", "readonly")
+
+
 class TokenCreateRequest(BaseModel):
     name: str
+    scope: str = "full"
 
 
 class TokenCreateResponse(BaseModel):
     id: int
     name: str
     prefix: str
+    scope: str
     token: str
     created_at: datetime
 
@@ -40,6 +45,7 @@ class TokenListItem(BaseModel):
     id: int
     name: str
     prefix: str
+    scope: str
     created_at: datetime
     last_used_at: Optional[datetime]
     revoked_at: Optional[datetime]
@@ -79,6 +85,9 @@ def create_token(
     name = body.name.strip()
     if not name:
         raise HTTPException(status_code=400, detail="Token name must not be empty")
+    scope = body.scope.strip().lower()
+    if scope not in VALID_SCOPES:
+        raise HTTPException(status_code=400, detail=f"Invalid scope. Must be one of: {', '.join(VALID_SCOPES)}")
 
     # Generate: "tome_" + 32-char urlsafe random (secrets.token_urlsafe(24) ≈ 32 chars)
     random_part = secrets.token_urlsafe(24)
@@ -91,6 +100,7 @@ def create_token(
         name=name,
         token_hash=token_hash,
         prefix=prefix,
+        scope=scope,
         created_at=datetime.utcnow(),
     )
     db.add(token)
@@ -113,6 +123,7 @@ def create_token(
         id=token.id,
         name=token.name,
         prefix=token.prefix,
+        scope=token.scope,
         token=plaintext,
         created_at=token.created_at,
     )
@@ -138,6 +149,7 @@ def list_tokens(
             id=t.id,
             name=t.name,
             prefix=t.prefix,
+            scope=getattr(t, "scope", "full"),
             created_at=t.created_at,
             last_used_at=t.last_used_at,
             revoked_at=t.revoked_at,

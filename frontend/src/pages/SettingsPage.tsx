@@ -325,6 +325,7 @@ export function SettingsPage() {
   const [apiTokensAllUsers, setApiTokensAllUsers] = useState(false)
   const [apiTokensLoading, setApiTokensLoading] = useState(false)
   const [tokenNewName, setTokenNewName] = useState('')
+  const [tokenNewScope, setTokenNewScope] = useState<'full' | 'readonly'>('full')
   const [tokenFormOpen, setTokenFormOpen] = useState(false)
   const [tokenCreating, setTokenCreating] = useState(false)
   const [tokenCreateError, setTokenCreateError] = useState<string | null>(null)
@@ -346,9 +347,10 @@ export function SettingsPage() {
     setTokenCreateError(null)
     setTokenCreating(true)
     try {
-      const res = await createToken(name)
+      const res = await createToken(name, tokenNewScope)
       setTokenRevealPlaintext(res.token)
       setTokenNewName('')
+      setTokenNewScope('full')
       setTokenFormOpen(false)
       const updated = await listTokens(apiTokensAllUsers)
       setApiTokens(updated)
@@ -1064,6 +1066,17 @@ export function SettingsPage() {
                       className="w-full h-9 rounded-md border border-border bg-background px-3 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
                     />
                   </div>
+                  <div className="shrink-0">
+                    <label className="block text-xs font-medium text-muted-foreground mb-1">Scope</label>
+                    <select
+                      value={tokenNewScope}
+                      onChange={e => setTokenNewScope(e.target.value as 'full' | 'readonly')}
+                      className="h-9 rounded-md border border-border bg-background px-2 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
+                    >
+                      <option value="full">Full access</option>
+                      <option value="readonly">Read-only</option>
+                    </select>
+                  </div>
                   <button
                     type="submit"
                     disabled={tokenCreating || !tokenNewName.trim()}
@@ -1150,6 +1163,11 @@ export function SettingsPage() {
                       >
                         <span className="flex items-center gap-1.5 font-medium text-foreground flex-1 truncate min-w-0">
                           {tok.name}
+                          {(tok.scope ?? 'full') === 'readonly' && (
+                            <span className="shrink-0 px-1 py-0.5 rounded text-[9px] font-semibold uppercase tracking-wide bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20">
+                              Read-only
+                            </span>
+                          )}
                           {isRevoked && (
                             <span className="shrink-0 px-1 py-0.5 rounded text-[9px] font-semibold uppercase tracking-wide bg-muted text-muted-foreground border border-border">
                               Revoked

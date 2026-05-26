@@ -18,6 +18,7 @@ class ApiToken(Base):
     name: Mapped[str] = mapped_column(String(64), nullable=False)
     token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
     prefix: Mapped[str] = mapped_column(String(8), nullable=False)
+    scope: Mapped[str] = mapped_column(String(16), nullable=False, default="full", server_default="full")
     last_used_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)

@@ -75,7 +75,11 @@ async def get_current_user(
             db.commit()
         except Exception:
             db.rollback()
-        # Stash token id on request.state for audit logging
+        if getattr(api_token, "scope", "full") == "readonly" and request.method not in ("GET", "HEAD", "OPTIONS"):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="This token is read-only",
+            )
         request.state.api_token_id = api_token.id
         return user
 
