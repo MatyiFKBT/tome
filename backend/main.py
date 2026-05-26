@@ -106,6 +106,11 @@ async def lifespan(app: FastAPI):
         conn.execute(text("DELETE FROM api_keys WHERE key_hash IS NULL OR key_hash = ''"))
         conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_api_keys_key_hash ON api_keys (key_hash)"))
         conn.commit()
+        # Add scope column to api_tokens
+        at_cols = {r[1] for r in conn.execute(text("PRAGMA table_info(api_tokens)")).fetchall()}
+        if "scope" not in at_cols:
+            conn.execute(text("ALTER TABLE api_tokens ADD COLUMN scope VARCHAR(16) NOT NULL DEFAULT 'full'"))
+            conn.commit()
     init_fts(engine)
     backfill_fts(engine)
     settings.ensure_dirs()
