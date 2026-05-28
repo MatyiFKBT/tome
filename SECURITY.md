@@ -19,7 +19,7 @@ later if you're on something older.
 
 **Please don't open a public GitHub issue for security reports.**
 
-Email **petutschnig.benedict@gmail.com** with:
+Email **security@bndct.dev** with:
 
 - A description of the vulnerability and its impact
 - Steps to reproduce (ideally with a minimal repro or proof-of-concept)
