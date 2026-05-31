@@ -6,6 +6,8 @@ All notable changes to Tome are documented here. Format loosely follows
 
 ## [Unreleased]
 
+## [1.1.0] — 2026-05-31 — "Vellum"
+
 ### Added
 - Send to device: email books to a Kindle, Kobo, or any address straight
   from the web UI — single or bulk (max 25 per send). Per-user device list
@@ -182,6 +184,7 @@ First public release.
 - Mobile-responsive PWA.
 - Single Docker image (FastAPI + React + SQLite).
 
+[1.1.0]: https://github.com/bndct-devops/tome/releases/tag/v1.1.0
 [1.0.0]: https://github.com/bndct-devops/tome/releases/tag/v1.0.0
 [0.2.0]: https://github.com/bndct-devops/tome/releases/tag/v0.2.0
 [0.1.0]: https://github.com/bndct-devops/tome/releases/tag/v0.1.0
