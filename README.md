@@ -86,6 +86,26 @@ Open `http://localhost:8080` and follow the setup wizard to create your admin ac
 
 Or with Docker Compose -- the canonical `docker-compose.yml` in this repo is portable; clone and `docker compose up -d`. See `docs/examples/` for setups specific to Unraid and similar.
 
+### Try it in 60 seconds
+
+Want to kick the tires before committing it to your homelab? This installer spins Tome up in a fresh `~/Tome` folder on a free port and prints the URL -- all it needs is Docker installed and running:
+
+```bash
+curl -fsSL https://tome.bndct.sh/install.sh | bash
+```
+
+Upload a book, click around, decide if it's for you. It uses a **fresh, empty** `~/Tome/books`, so nothing in your real library is touched. (It's a plain shell script -- read it first with `... | less` if you like.)
+
+Didn't click? Remove every trace -- container, image, and folder:
+
+```bash
+cd ~/Tome && docker compose down             # stop + remove the container
+docker rmi ghcr.io/bndct-devops/tome:latest  # drop the image
+rm -rf ~/Tome                                 # delete data + the test books folder
+```
+
+Did click? **Don't run it on your laptop long-term.** Move `~/Tome` to an always-on box (NAS, mini-PC, that spare Pi) and point the `books` volume at your real library. A sleeping laptop is a poor host for KOReader sync and OPDS -- a box that's always up is where Tome belongs.
+
 ### Volumes
 
 | Mount | Purpose |
