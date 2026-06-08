@@ -34,6 +34,11 @@ All notable changes to Tome are documented here. Format loosely follows
   series filled the bar to 100% before you'd finished it. It now reflects the
   number of volumes you've actually read, so the series only reads as complete
   once the last book is marked read.
+- **The Bindery is now reachable from the mobile sidebar.** Admins
+  could open the Bindery from the desktop sidebar but the link was missing from
+  the mobile navigation drawer, so it was unreachable on a phone or the installed
+  PWA. The admin-only Bindery entry (with its pending-count badge) now appears in
+  the mobile drawer too.
 
 ## [1.3.2] — 2026-06-06
 
