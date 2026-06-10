@@ -6,6 +6,8 @@ All notable changes to Tome are documented here. Format loosely follows
 
 ## [Unreleased]
 
+## [1.4.0] — 2026-06-10
+
 ### Added
 - **Send to KOReader (beta).** Queue a book from the web straight to your
   e-reader — no email, no Amazon Send-to-Kindle. It's the KOReader-native
