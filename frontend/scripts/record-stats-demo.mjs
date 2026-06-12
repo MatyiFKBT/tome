@@ -120,92 +120,101 @@ async function recordTheme(token, theme) {
   await page.goto(`${BASE}/stats`, { waitUntil: 'networkidle', timeout: 60000 })
   await page.waitForTimeout(1400)
 
+  // Continuous cursor: every move starts where the previous one ended, every
+  // click happens at the cursor after a settle beat. No teleporting — that's
+  // what made earlier takes read as random clicking.
+  let cur = { x: 720, y: 300 }
+  await page.mouse.move(cur.x, cur.y)
+  const moveTo = async (to, ms = 700) => {
+    await glide(page, cur, to, ms)
+    cur = to
+  }
+  const settleClick = async () => {
+    await page.waitForTimeout(220)
+    await page.mouse.down()
+    await page.waitForTimeout(90)
+    await page.mouse.up()
+  }
+
   // 1. Enter edit mode
-  const editBtn = page.locator('button:has-text("Edit")').first()
-  const editBox = await editBtn.boundingBox()
-  await glide(page, { x: 700, y: 450 }, center(editBox), 600)
-  await editBtn.click()
-  await page.waitForTimeout(900)
+  const editBox = await page.locator('button:has-text("Edit")').first().boundingBox()
+  await moveTo(center(editBox), 800)
+  await settleClick()
+  await page.waitForTimeout(1100)
 
   // 2. Drag "Top Books by Reading Time" over to the left — RGL reflows live.
   const topBooks = await tileBox(page, 'Top Books by Reading Time')
-  const grab = { x: topBooks.x + 120, y: topBooks.y + 16 } // header = drag handle
-  await glide(page, center(editBox), grab, 700)
-  await page.mouse.down()
+  await moveTo({ x: topBooks.x + 120, y: topBooks.y + 16 }, 800) // header = drag handle
   await page.waitForTimeout(250)
-  await glide(page, grab, { x: grab.x - topBooks.width * 0.9, y: grab.y }, 1100)
-  await page.waitForTimeout(350)
+  await page.mouse.down()
+  await page.waitForTimeout(300)
+  await moveTo({ x: cur.x - topBooks.width * 0.9, y: cur.y }, 1200)
+  await page.waitForTimeout(400)
   await page.mouse.up()
-  await page.waitForTimeout(1100)
+  await page.waitForTimeout(1200)
 
   // 3. Resize "Currently Reading" down to its content — in edit mode it shows
   // its full saved footprint (auto-fit is view-only), so with two books in
   // progress it reads as the obvious thing to shrink.
   const readingItem = page.locator('.react-grid-item:has(h3:text-is("Currently Reading"))').first()
-  const seHandle = readingItem.locator('.react-resizable-handle-se')
-  const seBox = await seHandle.boundingBox()
-  const handle = { x: seBox.x + seBox.width * 0.7, y: seBox.y + seBox.height * 0.7 }
-  await glide(page, { x: grab.x - topBooks.width * 0.9, y: grab.y }, handle, 700)
-  await page.mouse.down()
+  const seBox = await readingItem.locator('.react-resizable-handle-se').boundingBox()
+  await moveTo({ x: seBox.x + seBox.width * 0.7, y: seBox.y + seBox.height * 0.7 }, 800)
   await page.waitForTimeout(250)
-  await glide(page, handle, { x: handle.x, y: handle.y - 170 }, 900)
-  await page.waitForTimeout(350)
+  await page.mouse.down()
+  await page.waitForTimeout(300)
+  await moveTo({ x: cur.x, y: cur.y - 170 }, 1000)
+  await page.waitForTimeout(400)
   await page.mouse.up()
-  await page.waitForTimeout(1100)
+  await page.waitForTimeout(1200)
 
   // 4. Config popover on the daily chart: flip it to an area chart.
   const dailyTile = page.locator('div.rounded-xl:has(h3:text-is("Reading Time per Day"))').first()
-  const cfgBtn = dailyTile.locator('button[aria-label="Configure"]')
-  const cfgBox = await cfgBtn.boundingBox()
+  const cfgBox = await areaBox_safe(dailyTile.locator('button[aria-label="Configure"]'))
   if (cfgBox) {
-    await glide(page, { x: handle.x, y: handle.y + 110 }, center(cfgBox), 700)
-    await cfgBtn.click()
-    await page.waitForTimeout(800)
-    const areaBtn = page.locator('button:text-is("area")').first()
-    const areaBox = await areaBox_safe(areaBtn)
+    await moveTo(center(cfgBox), 800)
+    await settleClick()
+    await page.waitForTimeout(900)
+    const areaBox = await areaBox_safe(page.locator('button:text-is("area")').first())
     if (areaBox) {
-      await glide(page, center(cfgBox), center(areaBox), 500)
-      await areaBtn.click()
-      await page.waitForTimeout(1000)
+      await moveTo(center(areaBox), 600)
+      await settleClick()
+      await page.waitForTimeout(1100)
     }
     // Close by clicking the popover's backdrop — a blind Escape would exit
     // edit mode if the popover already closed itself, and the gear sits
-    // under the backdrop while it's open.
-    const backdrop = page.locator('div.fixed.inset-0.z-40').first()
-    if (await areaBox_safe(backdrop)) {
-      // Raw click — the actionability check can get stuck deciding what's on
-      // top while the grid is mid-reflow; any click on the backdrop closes it.
-      await page.mouse.click(40, 450)
+    // under the backdrop while it's open. Step just left of the popover so
+    // the dismissal looks like a deliberate click-away, not a jump.
+    if (await areaBox_safe(page.locator('div.fixed.inset-0.z-40').first())) {
+      await moveTo({ x: Math.max(40, cur.x - 260), y: cur.y + 40 }, 500)
+      await settleClick()
     }
-    await page.waitForTimeout(600)
+    await page.waitForTimeout(700)
   }
 
   // 5. Add a widget from the gallery.
-  const addBtn = page.locator('button:has-text("Add tile")').first()
-  const addBox = await addBtn.boundingBox()
+  const addBox = await areaBox_safe(page.locator('button:has-text("Add tile")').first())
   if (addBox) {
-    await glide(page, { x: 700, y: 400 }, center(addBox), 600)
-    await addBtn.click()
-    await page.waitForTimeout(1200)
-    const card = page.locator('button:has(span:text-is("Reading by Weekday"))').first()
-    const cardBox = await areaBox_safe(card)
+    await moveTo(center(addBox), 900)
+    await settleClick()
+    await page.waitForTimeout(1300)
+    const cardBox = await areaBox_safe(page.locator('button:has(span:text-is("Reading by Weekday"))').first())
     if (cardBox) {
-      await glide(page, center(addBox), center(cardBox), 700)
-      await card.click()
-      await page.waitForTimeout(700)
+      await moveTo(center(cardBox), 800)
+      await settleClick()
+      await page.waitForTimeout(800)
     }
-    // Only Escape if the gallery is still open (Esc would otherwise exit edit mode).
+    // Dismiss by clicking the dimmed backdrop beside the panel — visible intent.
     if (await areaBox_safe(page.locator('input[placeholder*="Search"]').first())) {
-      await page.keyboard.press('Escape')
+      await moveTo({ x: 90, y: 500 }, 500)
+      await settleClick()
     }
-    await page.waitForTimeout(800)
+    await page.waitForTimeout(900)
   }
 
   // 6. Done — back to view mode, idle on the result.
-  const doneBtn = page.locator('button:has-text("Done")').first()
-  const doneBox = await doneBtn.boundingBox()
-  await glide(page, { x: 700, y: 500 }, center(doneBox), 600)
-  await doneBtn.click()
+  const doneBox = await page.locator('button:has-text("Done")').first().boundingBox()
+  await moveTo(center(doneBox), 800)
+  await settleClick()
   await page.waitForTimeout(900)
   // End on the full settled board, not wherever editing left the scroll.
   await page.evaluate(() => new Promise((resolve) => {

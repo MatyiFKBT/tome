@@ -72,7 +72,10 @@ All notable changes to Tome are documented here. Format loosely follows
   dots, library-health panels and more) now come from three theme-aware tokens
   tuned to the new identity — dusty and low-chroma like the rosewood accent —
   instead of ~80 hardcoded Tailwind greens, blues, and ambers that each picked
-  their own shade. Book-type and file-format color labels keep their palette.
+  their own shade. The stats dashboard joins in: the Reading Pace charts trade
+  their hardcoded green for the chart accent, and trend indicators and the
+  100%-complete series bar use the semantic tokens. Book-type and file-format
+  color labels keep their palette.
 - The Wishlist page no longer repeats its own title above the list: the
   in-page section header now reads "Open (N)" (pairing with "Fulfilled"), and
   on an empty wishlist it disappears entirely — the empty state moves up and

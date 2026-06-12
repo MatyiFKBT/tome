@@ -122,6 +122,17 @@ const SHOTS = [
   { name: 'stats-top-books',          path: '/stats', viewport: { width: 1400, height: 1200, deviceScaleFactor: 2 }, settle: 1500, element: 'div.rounded-xl:has(h3:text-is("Top Books by Reading Time"))' },
   { name: 'stats-activity-grid',      path: '/stats', viewport: { width: 1400, height: 1200, deviceScaleFactor: 2 }, settle: 1500, element: 'div.rounded-xl:has(h3:has-text("Reading Activity"))' },
 
+  // Add-tile gallery modal — enter edit mode, open the gallery. The mini
+  // previews render live charts, so give them a beat to paint.
+  { name: 'stats-add-tile', path: '/stats', viewport: { width: 1600, height: 1300, deviceScaleFactor: 2 }, settle: 1500,
+    after: async (p) => {
+      await p.locator('button:has-text("Edit")').first().click()
+      await p.waitForTimeout(600)
+      await p.locator('button:has-text("Add tile")').first().click()
+      await p.waitForTimeout(1500)
+    },
+    element: 'div.max-w-3xl:has(h2:text-is("Add a widget"))' },
+
   // Habits tab — click the Habits pill first
   { name: 'stats-heatmap',           path: '/stats', viewport: { width: 1400, height: 1400, deviceScaleFactor: 2 }, settle: 1500, after: async (p) => { await p.locator('button:has-text("habits")').first().click().catch(() => {}); await p.waitForTimeout(700) }, element: 'div.rounded-xl:has(h3:has-text("Reading Intensity"))' },
   { name: 'stats-session-timeline',  path: '/stats', viewport: { width: 1400, height: 1400, deviceScaleFactor: 2 }, settle: 1500, after: async (p) => { await p.locator('button:has-text("habits")').first().click().catch(() => {}); await p.waitForTimeout(700) }, element: 'div.rounded-xl:has(h3:text-is("Session Timeline"))' },
