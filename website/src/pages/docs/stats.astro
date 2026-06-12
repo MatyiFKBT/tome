@@ -4,7 +4,6 @@ import SectionHero from '../../components/SectionHero.astro'
 import DocsMeta from '../../components/DocsMeta.astro'
 import Callout from '../../components/Callout.astro'
 import { ThemedShot } from '../../components/ThemedShot'
-import { ThemedVideo } from '../../components/ThemedVideo'
 import { withBase } from '../../lib/path'
 ---
 <DocsLayout title="Reading stats" description="A fully customisable stats dashboard — streaks, heatmaps, reading pace, completion estimates, and a year-in-review built from real session data.">
@@ -22,9 +21,6 @@ import { withBase } from '../../lib/path'
   <DocsMeta />
 
   <h2>Make it yours</h2>
-  <div class="docs-shot-bare">
-    <ThemedVideo client:load name="stats-edit" posterShot="stats" className="w-full block rounded-lg border border-[var(--docs-border,transparent)]" />
-  </div>
   <p>
     Hit <strong>Edit</strong> and the grid opens up: drag tiles by their header, resize them by
     the corner handle, remove or duplicate them, and undo a removal straight from the toast.
