@@ -38,6 +38,10 @@ All notable changes to Tome are documented here. Format loosely follows
   monthly streak calendar.
 
 ### Fixed
+- The stats dashboard no longer slides in from the side when the page opens.
+  The widget grid's first paint was laid out for a hardcoded 1280px width and
+  then animated every tile over to the real container size; it now measures
+  the container before mounting, so the board appears in place.
 - On phones the new stats dashboard squeezed every tile into a narrow column
   with dead space beside it: the default "A lot" side-padding setting applied
   its 16% gutters even on a 390px screen, and the time-range pills overflowed

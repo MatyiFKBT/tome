@@ -958,7 +958,11 @@ function FreeGrid({
   onDuplicate: (id: string) => void
   onConfigChange: (id: string, partial: Partial<TileConfig>) => void
 }) {
-  const { width, containerRef, mounted } = useContainerWidth()
+  // measureBeforeMount: without it the hook starts mounted with a hardcoded
+  // initialWidth of 1280, so the grid's first paint is laid out for 1280px and
+  // then every tile animates (the items' 200ms left/width transition) to the
+  // real container width — the whole board visibly slides in from the side.
+  const { width, containerRef, mounted } = useContainerWidth({ measureBeforeMount: true })
   // live "6 × 3" badge during resize — updated imperatively (no re-renders)
   const badgeRef = useRef<HTMLDivElement>(null)
   const seriesOptions = ctx.stats.series_completion.map((x) => x.series)
