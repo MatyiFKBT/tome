@@ -998,10 +998,12 @@ function ActivityChart({ timeline }: { timeline: { date: string; seconds: number
   const fmtDay = (iso: string) =>
     new Date(iso + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
   return (
-    <div className="flex flex-col flex-1 min-h-0">
+    <div className="flex flex-col">
       <p className="text-xs text-muted-foreground/70 mb-1.5 shrink-0">Activity</p>
-      {/* Bars + baseline — grows to fill, but capped so a few sessions don't balloon */}
-      <div className="relative flex-1 min-h-0 max-h-32">
+      {/* Fixed-height strip: flex-1 fill only works inside a sized flex parent,
+          and the hero wraps this in a plain div — flex-1 collapsed to 0px there
+          (bars rendered into no vertical space at all) */}
+      <div className="relative h-20">
         {/* faint baseline rule */}
         <div className="absolute bottom-0 left-0 right-0 h-px bg-border/40" />
         <div className="absolute inset-0 flex items-end gap-1.5">

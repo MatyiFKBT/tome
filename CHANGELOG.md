@@ -120,6 +120,9 @@ All notable changes to Tome are documented here. Format loosely follows
   monthly streak calendar.
 
 ### Fixed
+- The Activity strip in the book detail page's reading-stats panel rendered as
+  empty space — the bars were laid out into a zero-height container after the
+  panel's redesign. The per-day bars are back.
 - The stats dashboard no longer slides in from the side when the page opens.
   The widget grid's first paint was laid out for a hardcoded 1280px width and
   then animated every tile over to the real container size; it now measures
