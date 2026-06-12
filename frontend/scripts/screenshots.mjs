@@ -111,7 +111,12 @@ const SHOTS = [
   // Per-card element-bounded stats shots for /docs/stats. Each card gets its
   // own tight crop so the docs can interleave shot + description per H3.
   // Overview tab
-  { name: 'stats-totals',             path: '/stats', viewport: { width: 1400, height: 1200, deviceScaleFactor: 2 }, settle: 1500, element: 'div[class*="lg:grid-cols-6"]' },
+  // The headline stats are six separate dashboard tiles (no shared wrapper) —
+  // union-clip them. :has(p.font-bold.tabular-nums) picks the stat tile over
+  // the "Books Finished" chart widget that shares a title.
+  { name: 'stats-totals',             path: '/stats', viewport: { width: 1600, height: 1200, deviceScaleFactor: 2 }, settle: 1500,
+    elements: ['Reading Time', 'Sessions', 'Books Finished', 'Streak', 'Pages Turned', 'Completion Rate']
+      .map((t) => `div.rounded-xl:has(h3:text-is("${t}")):has(p.font-bold.tabular-nums)`) },
   { name: 'stats-currently-reading',  path: '/stats', viewport: { width: 1400, height: 1200, deviceScaleFactor: 2 }, settle: 1500, element: 'div.rounded-xl:has(h3:text-is("Currently Reading"))' },
   { name: 'stats-time-per-day',       path: '/stats', viewport: { width: 1400, height: 1200, deviceScaleFactor: 2 }, settle: 1500, element: 'div.rounded-xl:has(h3:text-is("Reading Time per Day"))' },
   { name: 'stats-top-books',          path: '/stats', viewport: { width: 1400, height: 1200, deviceScaleFactor: 2 }, settle: 1500, element: 'div.rounded-xl:has(h3:text-is("Top Books by Reading Time"))' },
@@ -124,7 +129,7 @@ const SHOTS = [
   { name: 'stats-monthly-comparison', path: '/stats', viewport: { width: 1400, height: 1400, deviceScaleFactor: 2 }, settle: 1500, after: async (p) => { await p.locator('button:has-text("habits")').first().click().catch(() => {}); await p.waitForTimeout(700) }, element: 'div.rounded-xl:has(h3:has-text("Last 12 Months"))' },
 
   // Library tab — click the Library pill first
-  { name: 'stats-series-completion', path: '/stats', viewport: { width: 1400, height: 1400, deviceScaleFactor: 2 }, settle: 1500, after: async (p) => { await p.locator('button:has-text("library")').first().click().catch(() => {}); await p.waitForTimeout(700) }, element: 'div:has(> h2:has-text("Series Completion"))' },
+  { name: 'stats-series-completion', path: '/stats', viewport: { width: 1400, height: 1400, deviceScaleFactor: 2 }, settle: 1500, after: async (p) => { await p.locator('button:has-text("library")').first().click().catch(() => {}); await p.waitForTimeout(700) }, element: 'div.rounded-xl:has(h3:text-is("Series Completion"))' },
   { name: 'stats-author-affinity',   path: '/stats', viewport: { width: 1400, height: 1400, deviceScaleFactor: 2 }, settle: 1500, after: async (p) => { await p.locator('button:has-text("library")').first().click().catch(() => {}); await p.waitForTimeout(700) }, element: 'div.rounded-xl:has(h3:text-is("Top Authors by Reading Time"))' },
   { name: 'stats-completion-by-type',path: '/stats', viewport: { width: 1400, height: 1400, deviceScaleFactor: 2 }, settle: 1500, after: async (p) => { await p.locator('button:has-text("library")').first().click().catch(() => {}); await p.waitForTimeout(700) }, element: 'div.rounded-xl:has(h3:has-text("Finish Rate per Book Category"))' },
   { name: 'stats-category-breakdown',path: '/stats', viewport: { width: 1400, height: 1400, deviceScaleFactor: 2 }, settle: 1500, after: async (p) => { await p.locator('button:has-text("library")').first().click().catch(() => {}); await p.waitForTimeout(700) }, element: 'div.rounded-xl:has(h3:text-is("Category Breakdown"))' },
@@ -512,7 +517,9 @@ const SHOTS = [
 
   // Mobile (PWA)
   { name: 'mobile-home', path: '/', mobile: true, waitFor: 'h2, h3, [class*="streak"]' },
-  { name: 'mobile-stats', path: '/stats', mobile: true, settle: 1200 },
+  // The dashboard remembers the active board server-side, so a previous shot's
+  // Habits/Library click would leak in — force the Overview pill.
+  { name: 'mobile-stats', path: '/stats', mobile: true, settle: 1200, after: async (p) => { await p.locator('button:has-text("overview")').first().click().catch(() => {}); await p.waitForTimeout(700) } },
   { name: 'mobile-series', path: '/?tab=series', mobile: true, settle: 800 },
   {
     name: 'mobile-reader',
@@ -623,7 +630,7 @@ async function maskModalBackdrop(page) {
 async function captureShot(browser, token, shot) {
   const context = await browser.newContext(shot.mobile ? MOBILE : { viewport: shot.viewport })
   const theme = THEME ?? shot.theme ?? 'light'
-  const prefs = { ...(shot.prefs ?? {}) }
+  const prefs = { tome_stats_hint: '1', ...(shot.prefs ?? {}) }
   // Reader has its own theme (light/sepia/dark) stored separately. For shots
   // that render the reader, mirror the app theme — amber → sepia (amber isn't
   // a valid reader theme).
@@ -645,6 +652,38 @@ async function captureShot(browser, token, shot) {
   if (shot.after) await shot.after(page)
   if (shot.settle) await page.waitForTimeout(shot.settle)
   const file = path.join(OUT, `${shot.name}.png`)
+  // Union-of-elements screenshot: clips to the union bounding box of every
+  // selector match plus padding. For content that is N sibling tiles with no
+  // shared wrapper — e.g. the stats dashboard's headline stat row, where the
+  // grid items are absolutely-positioned siblings of every other tile.
+  if (shot.elements) {
+    const pad = shot.elementsPad ?? 16
+    let box = null
+    for (const sel of shot.elements) {
+      for (const loc of await page.locator(sel).all()) {
+        const b = await loc.boundingBox()
+        if (!b) continue
+        box = box
+          ? {
+              x: Math.min(box.x, b.x),
+              y: Math.min(box.y, b.y),
+              right: Math.max(box.right, b.x + b.width),
+              bottom: Math.max(box.bottom, b.y + b.height),
+            }
+          : { x: b.x, y: b.y, right: b.x + b.width, bottom: b.y + b.height }
+      }
+    }
+    if (!box) throw new Error(`${shot.name}: no elements matched`)
+    const clip = {
+      x: Math.max(0, box.x - pad),
+      y: Math.max(0, box.y - pad),
+      width: box.right - box.x + pad * 2,
+      height: box.bottom - box.y + pad * 2,
+    }
+    await page.screenshot({ path: file, clip })
+    await context.close()
+    return file
+  }
   // Element-bounded screenshot: crops exactly to the target element's bounding
   // box, ideal for capturing a single section or modal without manual clip math.
   if (shot.element) {

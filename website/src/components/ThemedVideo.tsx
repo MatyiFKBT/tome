@@ -4,9 +4,11 @@ import { readTheme, subscribe, type Theme } from './theme'
 interface Props {
   name: string
   className?: string
+  /** Shot name (from /shots/{theme}/) to use as the poster. Defaults to home. */
+  posterShot?: string
 }
 
-export function ThemedVideo({ name, className }: Props) {
+export function ThemedVideo({ name, className, posterShot = 'home' }: Props) {
   const [theme, setTheme] = useState<Theme>('light')
   const videoRef = useRef<HTMLVideoElement>(null)
   const timeRef = useRef(0)
@@ -33,7 +35,7 @@ export function ThemedVideo({ name, className }: Props) {
 
   const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '')
   const src = `${base}/${name}-${theme}.webm`
-  const poster = `${base}/shots/${theme}/home.png`
+  const poster = `${base}/shots/${theme}/${posterShot}.png`
 
   return (
     <video
