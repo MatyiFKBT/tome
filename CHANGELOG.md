@@ -38,6 +38,13 @@ All notable changes to Tome are documented here. Format loosely follows
   monthly streak calendar.
 
 ### Fixed
+- On phones the new stats dashboard squeezed every tile into a narrow column
+  with dead space beside it: the default "A lot" side-padding setting applied
+  its 16% gutters even on a 390px screen, and the time-range pills overflowed
+  the header, making the whole page scroll sideways. Phones now always get a
+  slim fixed gutter (the padding setting still applies from tablet width up)
+  and the range pills wrap onto their own header line instead of spilling off
+  the edge.
 - The 365-day reading heatmap bucketed days in UTC, so for anyone east of
   Greenwich an evening session could light up the wrong day (and dent a streak's
   look). It now uses local dates, matching how every other chart counts days.
