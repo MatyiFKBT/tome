@@ -82,6 +82,10 @@ All notable changes to Tome are documented here. Format loosely follows
   monthly streak calendar.
 
 ### Fixed
+- The stats dashboard no longer slides in from the side when the page opens.
+  The widget grid's first paint was laid out for a hardcoded 1280px width and
+  then animated every tile over to the real container size; it now measures
+  the container before mounting, so the board appears in place.
 - The 365-day reading heatmap bucketed days in UTC, so for anyone east of
   Greenwich an evening session could light up the wrong day (and dent a streak's
   look). It now uses local dates, matching how every other chart counts days.
