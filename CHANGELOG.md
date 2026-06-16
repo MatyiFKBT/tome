@@ -6,6 +6,8 @@ All notable changes to Tome are documented here. Format loosely follows
 
 ## [Unreleased]
 
+## [1.5.1] — 2026-06-16
+
 ### Fixed
 - **Private libraries now actually hide books.** Book visibility is gated solely
   by library membership: a book placed in a private library is hidden from
