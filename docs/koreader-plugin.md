@@ -22,6 +22,7 @@ The plugin is pre-configured with your server URL and API key. No manual configu
 
 - **Reading sync** -- position, progress, and reading sessions sync between KOReader and Tome's web reader
 - **Rating sync** -- KOReader's native star rating and review sync both ways with Tome
+- **Reading-history import** -- backfill Tome's Stats with KOReader's own per-page reading history from before TomeSync (reading time and pages only -- never your read/unread status)
 - **Series browser** -- browse your library's series and download entire series to your device in one tap
 - **Offline-safe** -- everything works seamlessly when your server is unreachable; sessions queue and flush later
 - **Context-aware menu** -- different options when a book is open vs. from the home screen
@@ -71,6 +72,24 @@ Every time you close the lid or close a book, the plugin records a session with:
 Sessions shorter than 10 seconds are filtered out. Each session has a unique ID to prevent duplicates.
 
 These sessions power the **Stats** page in Tome, showing reading time, streaks, and charts.
+
+### Reading-History Import
+
+KOReader keeps its own per-page reading log in `statistics.sqlite3` — often going back
+years, long before you installed TomeSync. The plugin can import that log into Tome so
+your **Stats** page reflects reading from before TomeSync existed.
+
+- Enable **TomeSync > Auto-sync reading history on launch**, or run it once from
+  **TomeSync > Sync reading history** (also assignable to a gesture).
+- The first sync pushes your **entire** history; it is **chunked and resumable** — the
+  server tracks a per-device watermark and ignores duplicates, so it survives the device
+  sleeping or Wi-Fi dropping mid-sync. Later syncs send only new reading.
+- It imports **reading time and pages only** — it never changes your read/unread status.
+  That stays yours to set (only the live progress sync above moves status).
+- Books are matched to your library by title/series/volume; anything the matcher can't
+  place confidently is left out rather than guessed at, so nothing wrong appears in your
+  stats. Multiple devices each sync their own history without double-counting the same
+  reading.
 
 ### Reading Status
 
@@ -207,6 +226,7 @@ The plugin menu is context-aware. It self-registers in the **wrench menu** (afte
 | Option | Description |
 |---|---|
 | **Browse series** | Opens the series browser. Lists all series with book count and author. Tap to download. |
+| **Sync reading history** | Imports KOReader's per-page reading log into Tome's Stats (time and pages only). First run backfills everything; chunked and resumable. See [Reading-History Import](#reading-history-import). |
 | **Settings** | Submenu with persistent options and diagnostics (see below). |
 | **About** | Version info (semver + build). |
 
@@ -230,16 +250,18 @@ The plugin menu is context-aware. It self-registers in the **wrench menu** (afte
 | **Re-resolve all books** | Wipes the local filename-to-book-ID cache. Use if a book matched incorrectly. |
 | **Check for updates** | Fetches the latest plugin build from your server and installs it if newer (then prompts to restart). |
 | **Auto-check for updates on launch** | Opt-in toggle. When on, TomeSync checks for updates shortly after startup and prompts only when one is available. |
+| **Auto-sync reading history on launch** | Opt-in toggle, off by default. When on, TomeSync pushes new KOReader reading history to Tome shortly after startup (the first run backfills your whole history; chunked and resumable). Reading time and pages only — never your read/unread status. See [Reading-History Import](#reading-history-import). |
 
 ### Gestures
 
-TomeSync registers two bindable gesture actions (KOReader **Settings → Taps and gestures → Gesture manager**, listed under *General* — available in both the reader and the file manager):
+TomeSync registers bindable gesture actions (KOReader **Settings → Taps and gestures → Gesture manager**, listed under *General* — available in both the reader and the file manager):
 
 | Action | Does |
 |---|---|
 | **TomeSync: Open menu** | Pops the full context-aware TomeSync menu as a standalone popup. |
 | **TomeSync: Browse series** | Jumps straight to the series browser/downloader. |
 | **TomeSync: Sync highlights** | Pushes the current book's highlights and notes to Tome immediately. |
+| **TomeSync: Sync reading history** | Imports KOReader's per-page reading history into Tome's Stats (time and pages only). |
 
 ---
 

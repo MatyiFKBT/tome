@@ -177,7 +177,7 @@ Shelves are per-user and private. Each shelf can have a custom icon chosen from 
 
 ## Reading Stats
 
-The Stats page has three tabs, all powered by KOReader session data via TomeSync.
+The Stats page has three tabs, all powered by KOReader session data via TomeSync. The time-based charts can also be **backfilled from KOReader's own per-page reading history** (from before TomeSync) by enabling reading-history import in the plugin — see the [KOReader plugin](koreader-plugin.md#reading-history-import) docs. The backfill adds reading time and pages only; it never changes your read/unread status.
 
 ### Overview
 
