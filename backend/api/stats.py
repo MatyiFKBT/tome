@@ -17,6 +17,7 @@ from backend.models.user_dashboard import UserDashboard
 from backend.models.tome_sync import ReadingSession, TomeSyncPosition
 from backend.models.book import Book, BookFile
 from backend.models.user_book_status import UserBookStatus
+from backend.models.user_series_rating import UserSeriesRating
 from backend.models.library import BookType
 from backend.services.streaks import reconciled_user_streaks
 from backend.services import reconciled_reading as rr
@@ -636,6 +637,88 @@ def get_stats(
             entry[cat] = running_total[cat]
         library_growth.append(entry)
 
+    # ── Ratings / taste (all-time, independent of the date window) ─────────────
+    # Your taste isn't a 30-day thing, so these ignore cutoff/range entirely.
+    book_seconds_all = rr.book_seconds(db, current_user.id, tz_modifier, covered, None, None)
+    rated_rows = (
+        db.query(
+            Book.id, Book.title, Book.author, Book.cover_path,
+            func.coalesce(BookType.label, "Uncategorized").label("category"),
+            UserBookStatus.rating, UserBookStatus.rated_at, UserBookStatus.updated_at,
+        )
+        .select_from(UserBookStatus)
+        .join(Book, Book.id == UserBookStatus.book_id)
+        .outerjoin(BookType, BookType.id == Book.book_type_id)
+        .filter(
+            UserBookStatus.user_id == current_user.id,
+            UserBookStatus.rating.isnot(None),
+            Book.status == "active",
+            book_visibility_filter(db, current_user),
+        )
+        .all()
+    )
+    rated_books = sorted(
+        [
+            {
+                "book_id": r.id, "title": r.title, "author": r.author,
+                "has_cover": bool(r.cover_path), "category": r.category,
+                "rating": int(r.rating),
+                "seconds": int(book_seconds_all.get(r.id, (0, 0, 0))[0]),
+                "rated_at": (r.rated_at or r.updated_at).isoformat() if (r.rated_at or r.updated_at) else None,
+            }
+            for r in rated_rows
+        ],
+        key=lambda b: b["rating"], reverse=True,
+    )
+
+    dist_counts = {i: 0 for i in range(1, 6)}
+    cat_acc: dict[str, list[int]] = {}
+    for b in rated_books:
+        if 1 <= b["rating"] <= 5:
+            dist_counts[b["rating"]] += 1
+        cat_acc.setdefault(b["category"], []).append(b["rating"])
+    rating_distribution = [{"rating": i, "count": dist_counts[i]} for i in range(1, 6)]
+    rating_by_category = [
+        {"category": c, "avg": round(sum(v) / len(v), 2), "count": len(v)}
+        for c, v in sorted(cat_acc.items(), key=lambda kv: sum(kv[1]) / len(kv[1]), reverse=True)
+    ]
+
+    series_rating_rows = (
+        db.query(UserSeriesRating.series_name, UserSeriesRating.rating)
+        .filter(UserSeriesRating.user_id == current_user.id, UserSeriesRating.rating.isnot(None))
+        .order_by(UserSeriesRating.rating.desc())
+        .all()
+    )
+    series_sample: dict[str, int] = {}
+    if series_rating_rows:
+        names = [s.series_name for s in series_rating_rows]
+        for sname, bid in (
+            db.query(Book.series, func.min(Book.id))
+            .filter(Book.series.in_(names), Book.status == "active")
+            .group_by(Book.series)
+        ):
+            series_sample[sname] = bid
+    series_ratings = [
+        {"series": s.series_name, "rating": int(s.rating),
+         "sample_book_id": series_sample.get(s.series_name)}
+        for s in series_rating_rows
+    ]
+
+    rating_trend = sorted(
+        [{"date": b["rated_at"][:10], "rating": b["rating"]} for b in rated_books if b["rated_at"]],
+        key=lambda x: x["date"],
+    )
+
+    ratings = {
+        "count": len(rated_books),
+        "avg": round(sum(b["rating"] for b in rated_books) / len(rated_books), 2) if rated_books else 0,
+        "distribution": rating_distribution,
+        "by_category": rating_by_category,
+        "books": rated_books,          # sorted rating desc; powers top/lowest + scatter
+        "series": series_ratings,
+        "trend": rating_trend,
+    }
+
     return {
         "range_days": effective_days,
         "headline": {
@@ -667,6 +750,7 @@ def get_stats(
         "completion_by_type": completion_by_type,
         "pace_by_format": pace_by_format,
         "library_growth": library_growth,
+        "ratings": ratings,
     }
 
 

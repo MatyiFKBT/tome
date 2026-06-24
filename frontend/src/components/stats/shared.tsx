@@ -44,6 +44,15 @@ export interface StatsResponse {
   completion_by_type: { category: string; started: number; finished: number; pct: number }[]
   pace_by_format: { format: string; pages_per_min: number; sessions: number; pages: number; seconds: number }[]
   library_growth: { month: string; total: number; [category: string]: number | string }[]
+  ratings: {
+    count: number
+    avg: number
+    distribution: { rating: number; count: number }[]
+    by_category: { category: string; avg: number; count: number }[]
+    books: { book_id: number; title: string; author: string | null; has_cover: boolean; category: string; rating: number; seconds: number; rated_at: string | null }[]
+    series: { series: string; rating: number; sample_book_id: number | null }[]
+    trend: { date: string; rating: number }[]
+  }
 }
 
 export interface CompletionEstimate {

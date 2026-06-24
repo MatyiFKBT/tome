@@ -7,6 +7,14 @@ All notable changes to Tome are documented here. Format loosely follows
 ## [Unreleased]
 
 ### Added
+- **A "Taste" tab on Reading Stats.** A fourth board next to Overview / Habits /
+  Library, built from your book ratings: a **rating distribution** (how you spread
+  your stars), **taste by genre** (your average rating per book type), your
+  **highest & lowest rated** books, a **rating-vs-time** scatter (do you linger on
+  the ones you rate higher?), **best-rated series**, and a **rating trend** over
+  time. Like every other tile, each is add/move/resize/removable, and these ignore
+  the date-range picker since ratings are all-time. Existing customised dashboards
+  get the new tab appended without touching your current boards.
 - **Your stats now include reading from before TomeSync.** KOReader keeps its own
   per-page reading log (`statistics.sqlite3`) going back to whenever you started
   reading — often long before Tome existed. TomeSync can now import that history,
