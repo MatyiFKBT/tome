@@ -661,9 +661,9 @@ const INITIAL_POS: Record<string, { x: number; y: number; w: number; h: number }
 type TabState = { id: string; label: string; tiles: Tile[]; layout: Layout }
 
 const TAB_DEFS: { id: string; label: string; ids: string[] }[] = [
-  { id: 'overview', label: 'Overview', ids: [...STAT_IDS, 'currently-reading', 'daily', 'top-books', 'books-finished', 'activity-365', 'lifetime-totals', 'session-log', 'goal'] },
-  { id: 'habits', label: 'Habits', ids: ['hour-dow', 'reading-clock', 'session-timeline', 'reading-pace', 'pace-by-format', 'speed-trend', 'estimates', 'period-comparison', 'monthly-comparison'] },
-  { id: 'library', label: 'Library', ids: ['year-in-review', 'library-completion', 'series-completion', 'author-affinity', 'completion-by-type', 'category-breakdown', 'genre-over-time', 'reading-by-language', 'library-growth', 'personal-records', 'per-book-table'] },
+  { id: 'overview', label: 'Overview', ids: [...STAT_IDS, 'currently-reading', 'daily', 'top-books', 'books-finished', 'activity-365', 'session-log', 'goal'] },
+  { id: 'habits', label: 'Habits', ids: ['hour-dow', 'session-timeline', 'reading-pace', 'pace-by-format', 'speed-trend', 'estimates', 'period-comparison', 'monthly-comparison'] },
+  { id: 'library', label: 'Library', ids: ['year-in-review', 'series-completion', 'author-affinity', 'completion-by-type', 'category-breakdown', 'genre-over-time', 'library-growth', 'per-book-table'] },
   { id: 'taste', label: 'Taste', ids: ['rating-distribution', 'taste-by-genre', 'rating-vs-time', 'rating-trend', 'top-rated', 'best-rated-series'] },
 ]
 
