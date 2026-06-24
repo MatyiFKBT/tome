@@ -18,9 +18,7 @@ from backend.models.tome_sync import ReadingSession, TomeSyncPosition
 from backend.models.book import Book, BookFile
 from backend.models.user_book_status import UserBookStatus
 from backend.models.library import BookType
-from backend.services.streaks import (
-    compute_user_streaks, streaks_from_dates, effective_today, date_modifier,
-)
+from backend.services.streaks import reconciled_user_streaks
 from backend.services import reconciled_reading as rr
 
 router = APIRouter(tags=["stats"])
@@ -137,12 +135,9 @@ def get_stats(
     books_finished_count = finished_query.count()
 
     # Streaks (all time, local-day with 4h rollover). Reconciled: page-stat days count too.
-    # Streaks use the rollover modifier, distinct from the plain tz_modifier above.
-    if covered:
-        streak_days = rr.active_days(db, current_user.id, date_modifier(tz_offset), covered)
-        current_streak, longest_streak = streaks_from_dates(streak_days, effective_today(tz_offset))
-    else:
-        current_streak, longest_streak = compute_user_streaks(db, current_user.id, tz_offset)
+    current_streak, longest_streak = reconciled_user_streaks(
+        db, current_user.id, tz_offset, covered
+    )
 
     # Daily aggregation (for selected range) — reconciled (page-stats win per book).
     daily = _fill_daily_map(
