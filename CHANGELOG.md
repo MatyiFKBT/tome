@@ -30,6 +30,13 @@ All notable changes to Tome are documented here. Format loosely follows
   survives reboots. Requires TomeSync plugin build 21. (KOReader plugin semver
   1.5.1.)
 
+### Fixed
+- **The Day-streak on the Home tab now matches your stats page.** After importing
+  your KOReader reading history, the Home summary kept showing a shorter streak
+  than the Stats page because it only counted live TomeSync sessions and ignored
+  the imported page-stat days. Both now count reconciled reading, so a single,
+  consistent streak shows everywhere.
+
 ## [1.6.0] — 2026-06-21 — "Marginalia"
 
 ### Added

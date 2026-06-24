@@ -11,7 +11,7 @@ from backend.models.user import User
 from backend.models.tome_sync import ReadingSession
 from backend.models.book import Book
 from backend.models.user_book_status import UserBookStatus
-from backend.services.streaks import compute_user_streaks
+from backend.services.streaks import reconciled_user_streaks
 
 router = APIRouter(prefix="/home", tags=["home"])
 
@@ -51,7 +51,9 @@ def get_home_stats(
         .count()
     )
 
-    current_streak_days, _ = compute_user_streaks(db, current_user.id, tz_offset)
+    # Reconciled so the home streak matches the stats page: imported KOReader
+    # page-stat days count alongside live sessions (no-op without imported stats).
+    current_streak_days, _ = reconciled_user_streaks(db, current_user.id, tz_offset)
 
     return {
         "current_streak_days": current_streak_days,

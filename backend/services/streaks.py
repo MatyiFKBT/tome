@@ -69,3 +69,28 @@ def compute_user_streaks(
     )
     day_set = {date.fromisoformat(r.d) for r in rows if r.d}
     return streaks_from_dates(day_set, effective_today(tz_offset_minutes))
+
+
+def reconciled_user_streaks(
+    db: Session,
+    user_id: int,
+    tz_offset_minutes: int,
+    covered: list[int] | None = None,
+) -> tuple[int, int]:
+    """Return (current, longest) streaks counting reconciled reading.
+
+    When the user has imported KOReader page-stats, those days count toward the
+    streak alongside live reading sessions; otherwise this is identical to
+    ``compute_user_streaks``. This is the single source of truth so the home and
+    stats endpoints can't drift apart. Pass ``covered`` to reuse an already-fetched
+    covered-book-id list.
+    """
+    # Imported lazily to avoid a circular import (reconciled_reading pulls in models).
+    from backend.services import reconciled_reading as rr
+
+    if covered is None:
+        covered = rr.covered_book_ids(db, user_id)
+    if not covered:
+        return compute_user_streaks(db, user_id, tz_offset_minutes)
+    day_set = rr.active_days(db, user_id, date_modifier(tz_offset_minutes), covered)
+    return streaks_from_dates(day_set, effective_today(tz_offset_minutes))
