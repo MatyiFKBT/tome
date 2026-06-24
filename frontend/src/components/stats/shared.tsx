@@ -53,6 +53,10 @@ export interface StatsResponse {
     series: { series: string; rating: number; sample_book_id: number | null }[]
     trend: { date: string; rating: number }[]
   }
+  lifetime: { seconds: number; sessions: number; pages: number; books_finished: number; active_days: number; longest_streak_days: number }
+  records: { longest_session_seconds: number; longest_session_title: string | null; biggest_day_seconds: number; biggest_day_date: string | null; most_pages_day: number; most_pages_date: string | null }
+  tbr: { owned: number; read: number; reading: number; shelved: number; unread: number; pct: number; by_type: { type: string; owned: number; read: number; pct: number }[] }
+  language: { language: string; code: string; seconds: number; books: number }[]
 }
 
 export interface CompletionEstimate {

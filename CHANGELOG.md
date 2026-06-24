@@ -15,6 +15,13 @@ All notable changes to Tome are documented here. Format loosely follows
   time. Like every other tile, each is add/move/resize/removable, and these ignore
   the date-range picker since ratings are all-time. Existing customised dashboards
   get the new tab appended without touching your current boards.
+- **More Reading Stats tiles.** Five new tiles across the existing boards:
+  **Lifetime Totals** (all-time hours / pages / books / streak), **Personal
+  Records** (longest session, biggest reading day, most pages in a day),
+  **Library Completion** (how much of what you own you've read, overall and per
+  type), a **Reading Clock** (a 24-hour radial of when you read), and **Reading by
+  Language**. Add any of them from the tile gallery; new boards include them by
+  default.
 - **Your stats now include reading from before TomeSync.** KOReader keeps its own
   per-page reading log (`statistics.sqlite3`) going back to whenever you started
   reading — often long before Tome existed. TomeSync can now import that history,

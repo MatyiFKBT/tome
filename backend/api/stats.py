@@ -719,6 +719,97 @@ def get_stats(
         "trend": rating_trend,
     }
 
+    # ── Lifetime / records / TBR / language (all-time, ignore the date range) ──
+    lt_secs, lt_sessions, lt_pages = rr.totals(db, current_user.id, tz_modifier, covered, None, None)
+    all_daily = rr.daily_map(db, current_user.id, tz_modifier, covered, None, None)
+    lifetime = {
+        "seconds": lt_secs,
+        "sessions": lt_sessions,
+        "pages": lt_pages,
+        "books_finished": db.query(UserBookStatus).filter(
+            UserBookStatus.user_id == current_user.id, UserBookStatus.status == "read").count(),
+        "active_days": sum(1 for v in all_daily.values() if v[0] > 0),
+        "longest_streak_days": longest_streak,
+    }
+
+    # Personal records
+    longest_sess = (
+        db.query(ReadingSession.duration_seconds, Book.title)
+        .join(Book, Book.id == ReadingSession.book_id)
+        .filter(ReadingSession.user_id == current_user.id, ReadingSession.duration_seconds.isnot(None))
+        .order_by(ReadingSession.duration_seconds.desc())
+        .first()
+    )
+    biggest_day = max(all_daily.items(), key=lambda kv: kv[1][0], default=None)   # by reading time
+    pages_day = max(all_daily.items(), key=lambda kv: kv[1][2], default=None)      # by pages turned
+    records = {
+        "longest_session_seconds": int(longest_sess[0]) if longest_sess else 0,
+        "longest_session_title": longest_sess[1] if longest_sess else None,
+        "biggest_day_seconds": biggest_day[1][0] if biggest_day else 0,
+        "biggest_day_date": biggest_day[0] if biggest_day else None,
+        "most_pages_day": pages_day[1][2] if pages_day else 0,
+        "most_pages_date": pages_day[0] if pages_day else None,
+    }
+
+    # TBR / library completion
+    owned = db.query(Book).filter(
+        Book.status == "active", book_visibility_filter(db, current_user)).count()
+    status_counts = dict(
+        db.query(UserBookStatus.status, func.count(UserBookStatus.id))
+        .filter(UserBookStatus.user_id == current_user.id).group_by(UserBookStatus.status).all()
+    )
+    tbr_read = status_counts.get("read", 0)
+    tbr_reading = status_counts.get("reading", 0)
+    tbr_shelved = status_counts.get("shelved", 0)
+    type_rows = (
+        db.query(
+            func.coalesce(BookType.label, "Uncategorized"),
+            func.count(func.distinct(Book.id)),
+            func.sum(case((UserBookStatus.status == "read", 1), else_=0)),
+        )
+        .select_from(Book)
+        .outerjoin(BookType, BookType.id == Book.book_type_id)
+        .outerjoin(UserBookStatus, (UserBookStatus.book_id == Book.id) & (UserBookStatus.user_id == current_user.id))
+        .filter(Book.status == "active", book_visibility_filter(db, current_user))
+        .group_by(func.coalesce(BookType.label, "Uncategorized"))
+        .all()
+    )
+    tbr = {
+        "owned": owned,
+        "read": tbr_read,
+        "reading": tbr_reading,
+        "shelved": tbr_shelved,
+        # books with no status row are implicitly unread
+        "unread": max(owned - tbr_read - tbr_reading - tbr_shelved, 0),
+        "pct": round(tbr_read / owned * 100, 1) if owned else 0,
+        "by_type": sorted(
+            [
+                {"type": label, "owned": int(o), "read": int(rd or 0),
+                 "pct": round(int(rd or 0) / int(o) * 100, 1) if o else 0}
+                for label, o, rd in type_rows if o
+            ],
+            key=lambda x: x["owned"], reverse=True,
+        ),
+    }
+
+    # Reading time by language (normalized: en/eng/English -> one entry)
+    from backend.services.languages import normalize_language, language_label
+    lang_acc: dict[str, list] = {}
+    if book_seconds_all:
+        for bid, lang in db.query(Book.id, Book.language).filter(Book.id.in_(list(book_seconds_all.keys()))):
+            code = normalize_language(lang) or ""
+            e = lang_acc.setdefault(code, [0, 0])
+            e[0] += int(book_seconds_all.get(bid, (0, 0, 0))[0])
+            e[1] += 1
+    language = sorted(
+        [
+            {"language": language_label(c) if c else "Unknown", "code": c or "unknown",
+             "seconds": v[0], "books": v[1]}
+            for c, v in lang_acc.items()
+        ],
+        key=lambda x: x["seconds"], reverse=True,
+    )
+
     return {
         "range_days": effective_days,
         "headline": {
@@ -751,6 +842,10 @@ def get_stats(
         "pace_by_format": pace_by_format,
         "library_growth": library_growth,
         "ratings": ratings,
+        "lifetime": lifetime,
+        "records": records,
+        "tbr": tbr,
+        "language": language,
     }
 
 

@@ -8,7 +8,7 @@ import 'react-grid-layout/css/styles.css'
 import 'react-resizable/css/styles.css'
 import { Link } from 'react-router-dom'
 import { toPng } from 'html-to-image'
-import { ArrowLeft, Plus, RotateCcw, X, BarChart3, HelpCircle, Sparkles, SlidersHorizontal, Pencil, Check, GripVertical, Calendar, ChevronLeft, ChevronRight, Clock, Activity, BookCheck, Flame, FileText, Target, Gauge, Search, Copy, Loader2, CloudOff, Download, Upload, ImageDown, Star, TrendingUp, ScatterChart as ScatterIcon, type LucideIcon } from 'lucide-react'
+import { ArrowLeft, Plus, RotateCcw, X, BarChart3, HelpCircle, Sparkles, SlidersHorizontal, Pencil, Check, GripVertical, Calendar, ChevronLeft, ChevronRight, Clock, Activity, BookCheck, Flame, FileText, Target, Gauge, Search, Copy, Loader2, CloudOff, Download, Upload, ImageDown, Star, TrendingUp, ScatterChart as ScatterIcon, Trophy, Globe, Library as LibraryIcon, Clock3, Infinity as InfinityIcon, type LucideIcon } from 'lucide-react'
 import { cn, formatDate, formatDuration } from '@/lib/utils'
 import { api } from '@/lib/api'
 import { SyncStatusBadge } from '@/components/SyncStatusBadge'
@@ -61,6 +61,13 @@ import {
   BestRatedSeries,
   RatingTrend,
 } from '@/components/stats/widgets/taste'
+import {
+  LifetimeTotals,
+  PersonalRecords,
+  LibraryCompletion,
+  ReadingClock,
+  ReadingByLanguage,
+} from '@/components/stats/widgets/insights'
 
 /**
  * Reading Stats — a fully customisable dashboard. Every chart is a tile on a
@@ -473,6 +480,48 @@ const WIDGETS: WidgetDef[] = [
     fixedWindow: 'all',
     render: ({ stats }) => <RatingTrend trend={stats.ratings.trend} />,
   },
+  // Batch-2 insights
+  {
+    id: 'lifetime-totals',
+    title: 'Lifetime Totals',
+    icon: InfinityIcon,
+    size: { w: 6, h: 2, minW: 4, minH: 1 },
+    fixedWindow: 'all',
+    render: ({ stats }) => <LifetimeTotals data={stats.lifetime} />,
+  },
+  {
+    id: 'personal-records',
+    title: 'Personal Records',
+    icon: Trophy,
+    size: { w: 4, h: 3, minW: 3, minH: 2 },
+    autoH: true,
+    fixedWindow: 'all',
+    render: ({ stats }) => <PersonalRecords data={stats.records} />,
+  },
+  {
+    id: 'library-completion',
+    title: 'Library Completion',
+    icon: LibraryIcon,
+    size: { w: 4, h: 3, minW: 3, minH: 2 },
+    autoH: true,
+    fixedWindow: 'all',
+    render: ({ stats }) => <LibraryCompletion data={stats.tbr} />,
+  },
+  {
+    id: 'reading-clock',
+    title: 'Reading Clock',
+    icon: Clock3,
+    size: { w: 4, h: 3, minW: 3, minH: 2 },
+    render: ({ stats }) => <ReadingClock data={stats.hour_dow_heatmap} />,
+  },
+  {
+    id: 'reading-by-language',
+    title: 'Reading by Language',
+    icon: Globe,
+    size: { w: 4, h: 2, minW: 3, minH: 2 },
+    fixedWindow: 'all',
+    render: ({ stats }) => <ReadingByLanguage data={stats.language} />,
+  },
 ]
 
 const defById = (id: string) => WIDGETS.find((w) => w.id === id.replace(/--[a-z0-9]+$/, ''))!
@@ -514,6 +563,17 @@ const WIDGET_DESC: Record<string, string> = {
   'genre-over-time': 'Category mix over the year',
   'library-growth': 'Library size over time',
   'per-book-table': 'Sortable table of every book',
+  'rating-distribution': 'How you spread your 1–5 stars',
+  'taste-by-genre': 'Average rating per book type',
+  'rating-vs-time': 'Do you rate books you spend longer on higher?',
+  'rating-trend': 'Your ratings over time',
+  'top-rated': 'Your highest & lowest rated books',
+  'best-rated-series': 'Series ranked by your rating',
+  'lifetime-totals': 'All-time hours, pages, books, streak',
+  'personal-records': 'Longest session, biggest day, most pages',
+  'library-completion': 'How much of what you own you’ve read',
+  'reading-clock': 'A 24-hour radial of when you read',
+  'reading-by-language': 'Reading time split by language',
 }
 
 // Widgets that are a number/short text — render their preview at natural size (no scale).
@@ -530,15 +590,15 @@ const SCROLL_IDS = new Set([
 const GALLERY_GROUPS: { label: string; ids: string[] }[] = [
   {
     label: 'Overview',
-    ids: ['stat-time', 'stat-sessions', 'stat-finished', 'stat-streak', 'stat-pages', 'stat-completion', 'stat-metric', 'goal', 'currently-reading', 'recently-finished', 'streak-calendar', 'daily', 'top-books', 'books-finished', 'activity-365', 'session-log'],
+    ids: ['stat-time', 'stat-sessions', 'stat-finished', 'stat-streak', 'stat-pages', 'stat-completion', 'stat-metric', 'goal', 'currently-reading', 'recently-finished', 'streak-calendar', 'daily', 'top-books', 'books-finished', 'activity-365', 'lifetime-totals', 'session-log'],
   },
   {
     label: 'Habits',
-    ids: ['hour-dow', 'session-timeline', 'reading-pace', 'pace-by-format', 'dow-bar', 'time-of-day', 'time-by-format', 'speed-trend', 'estimates', 'period-comparison', 'monthly-comparison'],
+    ids: ['hour-dow', 'reading-clock', 'session-timeline', 'reading-pace', 'pace-by-format', 'dow-bar', 'time-of-day', 'time-by-format', 'speed-trend', 'estimates', 'period-comparison', 'monthly-comparison'],
   },
   {
     label: 'Library',
-    ids: ['year-in-review', 'series-completion', 'series-spotlight', 'author-affinity', 'completion-by-type', 'category-breakdown', 'genre-over-time', 'library-growth', 'per-book-table'],
+    ids: ['year-in-review', 'library-completion', 'series-completion', 'series-spotlight', 'author-affinity', 'completion-by-type', 'category-breakdown', 'genre-over-time', 'reading-by-language', 'library-growth', 'personal-records', 'per-book-table'],
   },
   {
     label: 'Taste',
@@ -589,15 +649,21 @@ const INITIAL_POS: Record<string, { x: number; y: number; w: number; h: number }
   'rating-trend': { x: 6, y: 2, w: 6, h: 2 },
   'top-rated': { x: 0, y: 4, w: 6, h: 3 },
   'best-rated-series': { x: 6, y: 4, w: 6, h: 3 },
+  // Batch-2 insights — placed at the bottom of their home tabs
+  'lifetime-totals': { x: 0, y: 23, w: 12, h: 2 },     // Overview
+  'reading-clock': { x: 0, y: 17, w: 4, h: 3 },        // Habits
+  'library-completion': { x: 0, y: 25, w: 4, h: 3 },   // Library
+  'personal-records': { x: 4, y: 25, w: 4, h: 3 },     // Library
+  'reading-by-language': { x: 8, y: 25, w: 4, h: 2 },  // Library
 }
 
 // Each tab is its own board (own tiles + layout), independently customizable.
 type TabState = { id: string; label: string; tiles: Tile[]; layout: Layout }
 
 const TAB_DEFS: { id: string; label: string; ids: string[] }[] = [
-  { id: 'overview', label: 'Overview', ids: [...STAT_IDS, 'currently-reading', 'daily', 'top-books', 'books-finished', 'activity-365', 'session-log', 'goal'] },
-  { id: 'habits', label: 'Habits', ids: ['hour-dow', 'session-timeline', 'reading-pace', 'pace-by-format', 'speed-trend', 'estimates', 'period-comparison', 'monthly-comparison'] },
-  { id: 'library', label: 'Library', ids: ['year-in-review', 'series-completion', 'author-affinity', 'completion-by-type', 'category-breakdown', 'genre-over-time', 'library-growth', 'per-book-table'] },
+  { id: 'overview', label: 'Overview', ids: [...STAT_IDS, 'currently-reading', 'daily', 'top-books', 'books-finished', 'activity-365', 'lifetime-totals', 'session-log', 'goal'] },
+  { id: 'habits', label: 'Habits', ids: ['hour-dow', 'reading-clock', 'session-timeline', 'reading-pace', 'pace-by-format', 'speed-trend', 'estimates', 'period-comparison', 'monthly-comparison'] },
+  { id: 'library', label: 'Library', ids: ['year-in-review', 'library-completion', 'series-completion', 'author-affinity', 'completion-by-type', 'category-breakdown', 'genre-over-time', 'reading-by-language', 'library-growth', 'personal-records', 'per-book-table'] },
   { id: 'taste', label: 'Taste', ids: ['rating-distribution', 'taste-by-genre', 'rating-vs-time', 'rating-trend', 'top-rated', 'best-rated-series'] },
 ]
 
@@ -624,9 +690,17 @@ const buildTabs = (): TabState[] => TAB_DEFS.map(buildTab)
 // touched. User-created tabs use `newId('tab')` (= `tab--...`), so they can never collide
 // with a default id like 'taste'; the worst case is a harmless duplicate *label*.
 const withMissingDefaultTabs = (tabs: TabState[]): TabState[] => {
-  const have = new Set(tabs.map((t) => t.id))
+  const byId = new Map(TAB_DEFS.map((d) => [d.id, d]))
+  // Repair a default tab that somehow got persisted empty (a transient build bug
+  // saved an empty board) by rebuilding it from its def; user-customised non-empty
+  // tabs are left untouched.
+  const repaired = tabs.map((t) => {
+    const def = byId.get(t.id)
+    return def && def.ids.length > 0 && (!t.tiles || t.tiles.length === 0) ? buildTab(def) : t
+  })
+  const have = new Set(repaired.map((t) => t.id))
   const missing = TAB_DEFS.filter((d) => !have.has(d.id)).map(buildTab)
-  return missing.length ? [...tabs, ...missing] : tabs
+  return missing.length ? [...repaired, ...missing] : repaired
 }
 
 const RANGES = [
