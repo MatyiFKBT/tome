@@ -87,18 +87,21 @@ def resolve_book(
 ):
     """Match a filename to a Tome book ID.
 
-    KOReader OPDS downloads save files as 'Author - Vol. X — Title.ext'.
-    We try multiple strategies, including volume number extraction.
+    Download paths name files differently — OPDS/single download use
+    '{title}.ext', the series browser uses 'Vol. X — Title.ext', and a user
+    naming template can produce e.g. '{series} - 02 - {title}.ext'. This is a
+    best-effort fallback used only when the plugin has no cached id for the file,
+    so it must never *guess* between two plausible books: a wrong guess silently
+    writes one book's reading progress onto another (issue: vol-2 mapped to
+    vol-1 because the series shared its name with its first book, so vol-1's
+    title appeared inside vol-2's filename).
     """
     import re
 
     stem = filename.rsplit(".", 1)[0] if "." in filename else filename
+    stem_l = stem.lower()
 
-    # Extract volume number from filename (e.g. "Vol. 1", "Vol. 12", "v01")
-    vol_match = re.search(r'[Vv]ol\.?\s*(\d+)', stem)
-    vol_num = float(vol_match.group(1)) if vol_match else None
-
-    # 1. Exact file path match in book_files
+    # 1. Exact file path match in book_files — the only unambiguous signal.
     book_file = (
         db.query(BookFile)
         .filter(BookFile.file_path.endswith("/" + filename) | (BookFile.file_path == filename))
@@ -109,44 +112,60 @@ def resolve_book(
         if book and book.status == "active":
             return {"book_id": book.id}
 
-    # 2. Extract title part and match with volume
-    title_part = None
-    if "\u2014" in stem:  # em dash: 'Author - Vol. X — Title'
-        title_part = stem.split("\u2014")[-1].strip()
-    elif " - " in stem:  # regular dash fallback
-        parts = stem.split(" - ", 1)
-        title_part = parts[-1].strip()
-        # Remove "Vol. X" prefix from title_part if present
-        title_part = re.sub(r'^[Vv]ol\.?\s*\d+\s*[-—]?\s*', '', title_part).strip()
+    # Volume number, in any of the shapes the download paths emit:
+    #   "Vol. 12", "v01", or a separator-delimited token "Series - 02 - Title".
+    vol_num = None
+    vol_match = (
+        re.search(r'[Vv]ol\.?\s*(\d+)', stem)
+        or re.search(r'\bv(\d{1,3})\b', stem)
+        or re.search(r'[-—]\s*0*(\d+)\s*[-—]', stem)
+    )
+    if vol_match:
+        vol_num = float(vol_match.group(1))
 
-    if title_part:
-        query = db.query(Book).filter(
-            Book.title.ilike(f"%{title_part}%"), Book.status == "active"
+    all_active = db.query(Book).filter(Book.status == "active").all()
+
+    # 2. Forward match: the book's title appears inside the filename. This is the
+    #    strong signal — the download paths all put the title into the name.
+    candidates = [b for b in all_active if b.title and b.title.lower() in stem_l]
+
+    # When the filename carries a volume number it is authoritative: it selects
+    # the right volume AND rejects any candidate whose series_index disagrees.
+    # This is what stops vol-2's filename (which contains vol-1's title when the
+    # series shares its name with its first book) from resolving to vol-1.
+    if vol_num is not None:
+        exact = [b for b in candidates if b.series_index == vol_num]
+        if len(exact) == 1:
+            return {"book_id": exact[0].id}
+        candidates = [
+            b for b in candidates
+            if b.series_index is None or b.series_index == vol_num
+        ]
+
+    if len(candidates) == 1:
+        return {"book_id": candidates[0].id}
+
+    if candidates:
+        # Most-specific title wins: the longest book title present in the filename
+        # (e.g. "Dune Messiah" beats the "Dune" nested inside it). A tie is
+        # genuinely ambiguous — refuse rather than clobber another book's progress.
+        candidates.sort(key=lambda b: len(b.title or ""), reverse=True)
+        if len(candidates[0].title) > len(candidates[1].title):
+            return {"book_id": candidates[0].id}
+        raise HTTPException(
+            status_code=404, detail="Ambiguous filename; could not resolve uniquely"
         )
-        if vol_num is not None:
-            # Prefer exact volume match
-            book = query.filter(Book.series_index == vol_num).first()
-            if book:
-                return {"book_id": book.id}
-        # Fall back to first match if no volume info
-        book = query.first()
-        if book:
-            return {"book_id": book.id}
 
-    # 3. Reverse match: book title contained in filename, with volume
-    books = db.query(Book).filter(Book.status == "active").all()
-    for book in books:
-        if book.title and book.title.lower() in stem.lower():
-            if vol_num is not None and book.series_index is not None:
-                if book.series_index == vol_num:
-                    return {"book_id": book.id}
-            else:
-                return {"book_id": book.id}
-
-    # 4. Reverse match without volume constraint (last resort)
-    for book in books:
-        if book.title and book.title.lower() in stem.lower():
-            return {"book_id": book.id}
+    # 3. Reverse fallback: the filename is a substring of exactly one title
+    #    (handles truncated/shortened names). Honour the volume here too.
+    reverse = [b for b in all_active if b.title and stem_l in b.title.lower()]
+    if vol_num is not None:
+        reverse = [
+            b for b in reverse
+            if b.series_index is None or b.series_index == vol_num
+        ]
+    if len(reverse) == 1:
+        return {"book_id": reverse[0].id}
 
     raise HTTPException(status_code=404, detail="No matching book found")
 

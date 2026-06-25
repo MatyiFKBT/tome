@@ -63,6 +63,14 @@ All notable changes to Tome are documented here. Format loosely follows
   1.5.1.)
 
 ### Fixed
+- **KOReader no longer syncs one book's reading progress onto another.** When the
+  plugin had to match a book by filename (e.g. after a file was moved or "Re-resolve
+  all books" was used), a series whose name matched its first book's title — combined
+  with a flat `{series} - 02 - {title}` download-naming template — could resolve every
+  volume back to volume 1, so later volumes overwrote volume 1's position. The matcher
+  now reads the volume number from all the filename shapes Tome produces, treats it as
+  authoritative, and refuses to resolve (rather than guess wrong) when a filename is
+  genuinely ambiguous.
 - **TomeSync no longer gets stuck "offline" after your Kindle wakes up.** When the
   device slept and Wi-Fi dropped, three failed sync attempts in a row used to latch
   TomeSync into a permanent back-off — it then skipped every request and never
