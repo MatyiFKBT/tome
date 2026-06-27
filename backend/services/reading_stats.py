@@ -125,6 +125,84 @@ def compute_book_reading_stats(
     }
 
 
+# ── Per-book reading intensity (imported KOReader page-stats) ─────────────────
+
+def compute_book_page_intensity(
+    db: Session,
+    *,
+    user_id: int,
+    book_id: int,
+    bins: int = 50,
+) -> Optional[dict]:
+    """Per-page reading intensity for one book, from imported KOReader page-stats.
+
+    Returns None when the user has no page-stats for this book (e.g. it was only
+    ever read in the web reader) — the caller hides the section in that case.
+
+    KOReader re-paginates whenever font/margins change, so a row's absolute page
+    number is only meaningful against its own ``total_pages``. We map each dwell
+    row to a fraction-of-book (``page / total_pages``) and bucket into ``bins``
+    slots — pagination-robust, and exactly the "where did the time go across the
+    book" curve we want. Distinct pages read (against the latest pagination) gives
+    an honest "X of Y pages" denominator without needing an intrinsic page count.
+    """
+    from backend.models.ko_stats import PageStat
+
+    rows = (
+        db.query(
+            PageStat.page,
+            PageStat.total_pages,
+            PageStat.duration_seconds,
+            PageStat.start_time,
+        )
+        .filter(
+            PageStat.user_id == user_id,
+            PageStat.book_id == book_id,
+            PageStat.total_pages > 0,
+        )
+        .all()
+    )
+    if not rows:
+        return None
+
+    curve = [0] * bins
+    bin_days: dict[int, set] = defaultdict(set)
+    distinct_pages: set[int] = set()
+    total_seconds = 0
+    latest_total_pages = 0
+
+    for page, total_pages, dur, start_time in rows:
+        if not total_pages or total_pages <= 0:
+            continue
+        frac = (page - 1) / total_pages          # page is 1-based
+        frac = min(max(frac, 0.0), 0.99999)
+        b = min(int(frac * bins), bins - 1)
+        dur = int(dur or 0)
+        curve[b] += dur
+        total_seconds += dur
+        distinct_pages.add(int(page))
+        latest_total_pages = max(latest_total_pages, int(total_pages))
+        # local-day bucket (page revisited on a different day ⇒ a re-read)
+        bin_days[b].add(int(start_time) // 86400 if start_time else 0)
+
+    pages_read = len(distinct_pages)
+    pct_read = (
+        min(round(pages_read / latest_total_pages * 100, 1), 100.0)
+        if latest_total_pages else 0.0
+    )
+    reread_bins = sum(1 for days in bin_days.values() if len(days) > 1)
+
+    return {
+        "bins": bins,
+        "curve": curve,                 # seconds of dwell per fraction-bin (0..bins-1)
+        "total_seconds": total_seconds,
+        "total_pages": latest_total_pages,
+        "pages_read": pages_read,
+        "pct_read": pct_read,           # distinct pages read ÷ total (capped 100)
+        "reread_bins": reread_bins,     # bins revisited on a later day
+    }
+
+
 # ── Admin aggregate — all users, one book ────────────────────────────────────
 
 def compute_book_aggregate_stats(

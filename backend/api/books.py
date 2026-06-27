@@ -1089,6 +1089,7 @@ def get_book_reading_stats(
     from backend.services.reading_stats import (
         compute_book_reading_stats,
         compute_book_aggregate_stats,
+        compute_book_page_intensity,
     )
 
     book = db.get(Book, book_id)
@@ -1103,8 +1104,10 @@ def get_book_reading_stats(
         if _is_admin(current_user)
         else None
     )
+    # Per-page intensity from imported KOReader page-stats (None if web-only reading)
+    intensity = compute_book_page_intensity(db, user_id=current_user.id, book_id=book_id)
 
-    return {"own": own, "aggregate": aggregate}
+    return {"own": own, "aggregate": aggregate, "intensity": intensity}
 
 
 # ── Single book ───────────────────────────────────────────────────────────────
