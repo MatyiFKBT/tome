@@ -104,7 +104,10 @@ export function ReadingTimePerDay({ daily, chartType = 'bar' }: { daily: StatsRe
               <ChartTooltip>
                 <div className="font-medium">{formatDate(d.date)}</div>
                 <div>{formatDuration(d.seconds)}</div>
-                <div className="text-muted-foreground">{d.sessions} session{d.sessions !== 1 ? 's' : ''}</div>
+                <div className="text-muted-foreground">
+                  {d.sessions} session{d.sessions !== 1 ? 's' : ''}
+                  {d.pages > 0 ? ` · ${d.pages.toLocaleString()} pages` : ''}
+                </div>
               </ChartTooltip>
             )
           }}
@@ -150,7 +153,10 @@ export function TopBooksByTime({ topBooks }: { topBooks: StatsResponse['top_book
               <ChartTooltip>
                 <div className="font-medium">{d.title}</div>
                 <div>{formatDuration(d.seconds)}</div>
-                <div className="text-muted-foreground">{d.sessions} session{d.sessions !== 1 ? 's' : ''}</div>
+                <div className="text-muted-foreground">
+                  {d.sessions} session{d.sessions !== 1 ? 's' : ''}
+                  {d.sessions > 0 ? ` · avg ${formatDuration(Math.round(d.seconds / d.sessions))}` : ''}
+                </div>
               </ChartTooltip>
             )
           }}
