@@ -182,7 +182,7 @@ const WIDGETS: WidgetDef[] = [
     icon: Clock,
     size: STAT_SIZE,
     render: ({ stats }) => (
-      <HeadlineStatBody value={formatDuration(stats.headline.total_reading_seconds)} sub={`avg ${formatDuration(stats.headline.avg_session_seconds)} / session`} />
+      <HeadlineStatBody value={formatDuration(stats.headline.total_reading_seconds)} sub={`avg ${formatDuration(stats.headline.avg_session_seconds)}`} />
     ),
   },
   {
@@ -1150,9 +1150,11 @@ function TileShell({
         className={cn('mb-3 flex items-center gap-1.5', editMode && !stacked && 'tile-drag-handle cursor-grab active:cursor-grabbing')}
       >
         {editMode && !stacked && <GripVertical className="h-3.5 w-3.5 shrink-0 text-muted-foreground/50" />}
-        {def.icon && <def.icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground/70" />}
-        {/* truncate, don't wrap — a wrapped title pushes the body out of 1-row tiles */}
-        <h3 className="min-w-0 truncate font-display text-[13px] font-medium text-muted-foreground">{def.titleFor?.(config) ?? def.title}</h3>
+        {def.icon && <def.icon className="h-3 w-3 shrink-0 text-muted-foreground/70" />}
+        {/* truncate, don't wrap — a wrapped title pushes the body out of 1-row tiles.
+            12px + a 12px icon keeps long labels ("Reading Time") on one line in a
+            narrow ~126px stat tile instead of clipping to "Reading Ti…". */}
+        <h3 className="min-w-0 truncate font-display text-xs font-medium text-muted-foreground">{def.titleFor?.(config) ?? def.title}</h3>
         {def.fixedWindow && (
           <span title="This tile uses a fixed window and ignores the range picker" className="shrink-0 rounded bg-muted px-1 py-px text-[9px] font-medium text-muted-foreground">
             {def.fixedWindow}
