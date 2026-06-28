@@ -10,7 +10,7 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import func
+from sqlalchemy import func, Integer
 from sqlalchemy.orm import Session
 
 from backend.models.book import Book
@@ -100,6 +100,61 @@ def compute_book_reading_stats(
         for row in timeline_rows
     ]
 
+    # ── Reconcile with imported KOReader page-stats ──────────────────────────
+    # Page-stats win per book (same rule as the dashboard's reconciled_reading),
+    # so a book read only on the device isn't shown empty. Untouched when the
+    # book has no page-stats — ps_seconds is 0 and this whole block is skipped.
+    from backend.models.ko_stats import PageStat
+
+    ps = (
+        db.query(
+            func.coalesce(func.sum(PageStat.duration_seconds), 0),
+            func.count(func.distinct(PageStat.page)),
+            func.min(PageStat.start_time),
+            func.max(PageStat.start_time),
+            func.max(PageStat.total_pages),
+        )
+        .filter(PageStat.user_id == user_id, PageStat.book_id == book_id)
+        .one()
+    )
+    ps_seconds = int(ps[0] or 0)
+    if ps_seconds > 0:
+        total_seconds = ps_seconds
+        pages_turned = int(ps[1] or 0)          # distinct pages genuinely read
+        ps_total_pages = int(ps[4] or 0)
+        # Daily buckets from page-stats (local-day = start_time // 86400, UTC).
+        day_rows = (
+            db.query(
+                func.cast(PageStat.start_time / 86400, Integer).label("day"),
+                func.coalesce(func.sum(PageStat.duration_seconds), 0).label("seconds"),
+                func.count(func.distinct(PageStat.page)).label("pages"),
+            )
+            .filter(PageStat.user_id == user_id, PageStat.book_id == book_id)
+            .group_by("day")
+            .order_by("day")
+            .all()
+        )
+        session_timeline = [
+            {
+                "date": datetime.fromtimestamp(int(r.day) * 86400, timezone.utc).strftime("%Y-%m-%d"),
+                "seconds": int(r.seconds),
+                "pages": int(r.pages),
+            }
+            for r in day_rows
+        ]
+        sessions = len(session_timeline)        # one "session" per reading day
+        avg_session_seconds = round(total_seconds / sessions) if sessions else 0
+        if ps[2]:
+            first_read = datetime.fromtimestamp(int(ps[2]), timezone.utc).isoformat()
+        if ps[3]:
+            last_read = datetime.fromtimestamp(int(ps[3]), timezone.utc).isoformat()
+        total_minutes = total_seconds / 60.0
+        if total_minutes > 0 and pages_turned > 0:
+            pace_pages_per_min = round(pages_turned / total_minutes, 2)
+        # Real page-based progress beats a stale stored progress_pct.
+        if ps_total_pages > 0:
+            progress = min(pages_turned / ps_total_pages, 1.0)
+
     # ── Estimated time to finish ─────────────────────────────────────────────
     estimated_finish_seconds: Optional[int] = None
     if (
@@ -122,6 +177,84 @@ def compute_book_reading_stats(
         "status": book_status,
         "session_timeline": session_timeline,
         "estimated_finish_seconds": estimated_finish_seconds,
+    }
+
+
+# ── Per-book reading intensity (imported KOReader page-stats) ─────────────────
+
+def compute_book_page_intensity(
+    db: Session,
+    *,
+    user_id: int,
+    book_id: int,
+    bins: int = 50,
+) -> Optional[dict]:
+    """Per-page reading intensity for one book, from imported KOReader page-stats.
+
+    Returns None when the user has no page-stats for this book (e.g. it was only
+    ever read in the web reader) — the caller hides the section in that case.
+
+    KOReader re-paginates whenever font/margins change, so a row's absolute page
+    number is only meaningful against its own ``total_pages``. We map each dwell
+    row to a fraction-of-book (``page / total_pages``) and bucket into ``bins``
+    slots — pagination-robust, and exactly the "where did the time go across the
+    book" curve we want. Distinct pages read (against the latest pagination) gives
+    an honest "X of Y pages" denominator without needing an intrinsic page count.
+    """
+    from backend.models.ko_stats import PageStat
+
+    rows = (
+        db.query(
+            PageStat.page,
+            PageStat.total_pages,
+            PageStat.duration_seconds,
+            PageStat.start_time,
+        )
+        .filter(
+            PageStat.user_id == user_id,
+            PageStat.book_id == book_id,
+            PageStat.total_pages > 0,
+        )
+        .all()
+    )
+    if not rows:
+        return None
+
+    curve = [0] * bins
+    bin_days: dict[int, set] = defaultdict(set)
+    distinct_pages: set[int] = set()
+    total_seconds = 0
+    latest_total_pages = 0
+
+    for page, total_pages, dur, start_time in rows:
+        if not total_pages or total_pages <= 0:
+            continue
+        frac = (page - 1) / total_pages          # page is 1-based
+        frac = min(max(frac, 0.0), 0.99999)
+        b = min(int(frac * bins), bins - 1)
+        dur = int(dur or 0)
+        curve[b] += dur
+        total_seconds += dur
+        distinct_pages.add(int(page))
+        latest_total_pages = max(latest_total_pages, int(total_pages))
+        # local-day bucket (page revisited on a different day ⇒ a re-read)
+        bin_days[b].add(int(start_time) // 86400 if start_time else 0)
+
+    pages_read = len(distinct_pages)
+    pct_read = (
+        min(round(pages_read / latest_total_pages * 100, 1), 100.0)
+        if latest_total_pages else 0.0
+    )
+    reread_bins = sum(1 for days in bin_days.values() if len(days) > 1)
+
+    return {
+        "bins": bins,
+        "curve": curve,                 # seconds of dwell per fraction-bin (0..bins-1)
+        "total_seconds": total_seconds,
+        "total_pages": latest_total_pages,
+        "pages_read": pages_read,
+        "pct_read": pct_read,           # distinct pages read ÷ total (capped 100)
+        "reread_bins": reread_bins,     # bins revisited on a later day
     }
 
 

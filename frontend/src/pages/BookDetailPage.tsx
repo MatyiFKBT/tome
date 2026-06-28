@@ -53,6 +53,16 @@ interface BookReadingStats {
   estimated_finish_seconds: number | null
 }
 
+interface BookIntensity {
+  bins: number
+  curve: number[]
+  total_seconds: number
+  total_pages: number
+  pages_read: number
+  pct_read: number
+  reread_bins: number
+}
+
 interface ReadingStatsResponse {
   own: BookReadingStats
   aggregate: {
@@ -60,6 +70,7 @@ interface ReadingStatsResponse {
     total_sessions: number
     distinct_readers: number
   } | null
+  intensity: BookIntensity | null
 }
 
 async function downloadFile(book: BookDetail, f: BookFile) {
@@ -685,8 +696,10 @@ export function BookDetailPage() {
     </div>
   )
 
-  // Full collapsible stats hero block
-  const statsFull = readingStats && readingStats.own.sessions > 0 ? (
+  // Full collapsible stats hero block. Shows when there are live sessions OR
+  // imported KOReader page-stats (a book read only on the device has no sessions
+  // but does have an intensity curve).
+  const statsFull = readingStats && (readingStats.own.sessions > 0 || readingStats.intensity) ? (
     <div className="mt-1 mb-5">
       <div className="flex items-center gap-2 mb-2.5">
         <button
@@ -700,7 +713,12 @@ export function BookDetailPage() {
         </button>
       </div>
       {statsOpen && (
-        <StatsLayoutHero own={readingStats.own} aggregate={readingStats.aggregate} />
+        <div className="flex flex-col gap-3">
+          {readingStats.own.sessions > 0 && (
+            <StatsLayoutHero own={readingStats.own} aggregate={readingStats.aggregate} />
+          )}
+          {readingStats.intensity && <IntensityBlock data={readingStats.intensity} />}
+        </div>
       )}
     </div>
   ) : null
@@ -1210,6 +1228,52 @@ function ActivityChart({ timeline }: { timeline: { date: string; seconds: number
       <div className="flex justify-between text-xs text-muted-foreground/50 mt-1 shrink-0">
         <span>{first?.date ? fmtDay(first.date) : ''}</span>
         <span>{last?.date ? fmtDay(last.date) : ''}</span>
+      </div>
+    </div>
+  )
+}
+
+// ── Reading intensity: per-page dwell across the book, from imported KOReader page-stats ─────
+
+function IntensityBlock({ data }: { data: BookIntensity }) {
+  const max = Math.max(...data.curve, 1)
+  const finished = data.pct_read >= 99
+  return (
+    <div className="rounded-xl border border-border bg-card px-5 py-4">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+        <p className="font-display text-sm text-foreground">Reading intensity</p>
+        <p className="text-xs text-muted-foreground">
+          <span className="font-medium tabular-nums text-foreground">{data.pages_read.toLocaleString()}</span>
+          {' '}of {data.total_pages.toLocaleString()} pages
+          {!finished && <span className="tabular-nums"> · {data.pct_read}%</span>}
+          {' · '}{formatDuration(data.total_seconds)} on device
+        </p>
+      </div>
+      {/* Dwell across the book, 0% → 100%. Taller bar = more time spent there. */}
+      <div className="mt-3 relative h-16">
+        <div className="absolute bottom-0 left-0 right-0 h-px bg-border/40" />
+        <div className="absolute inset-0 flex items-end gap-px">
+          {data.curve.map((secs, i) => {
+            const pct = secs > 0 ? Math.max(secs / max, 0.04) : 0
+            const at = Math.round((i / data.curve.length) * 100)
+            const tip = secs > 0 ? `~${at}% in · ${formatDuration(secs)}` : `~${at}% in · not read`
+            return (
+              <div
+                key={i}
+                className="flex-1 min-w-px bg-primary/60 hover:bg-primary transition-colors rounded-t-[1px]"
+                style={{ height: pct > 0 ? `${Math.round(pct * 100)}%` : '0%' }}
+                title={tip}
+              />
+            )
+          })}
+        </div>
+      </div>
+      <div className="flex justify-between text-xs text-muted-foreground/50 mt-1">
+        <span>start</span>
+        {data.reread_bins > 0 && (
+          <span className="text-muted-foreground/70">{data.reread_bins} stretch{data.reread_bins !== 1 ? 'es' : ''} re-read</span>
+        )}
+        <span>end</span>
       </div>
     </div>
   )

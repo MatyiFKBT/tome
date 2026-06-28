@@ -1,11 +1,11 @@
 """Personal reading statistics endpoint. TomeSync data only."""
 import json
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Query, HTTPException
-from sqlalchemy import func, case
+from sqlalchemy import func, case, Integer
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -900,6 +900,54 @@ def get_stats(
         "books": length_books,
     }
 
+    # ── Re-reads (all-time) — books with pages revisited on a later day ─────────
+    # A page read on 2+ distinct local-days is a re-read. We rank books by how
+    # many of their pages got revisited. Pure page-stats, no plugin work.
+    from backend.models.ko_stats import PageStat as _PageStat
+    _day = func.cast(_PageStat.start_time / 86400, Integer)
+    _reread_pages_sq = (
+        db.query(
+            _PageStat.book_id.label("book_id"),
+            _PageStat.page.label("page"),
+        )
+        .filter(_PageStat.user_id == current_user.id)
+        .group_by(_PageStat.book_id, _PageStat.page)
+        .having(func.count(func.distinct(_day)) > 1)
+        .subquery()
+    )
+    reread_counts = dict(
+        db.query(_reread_pages_sq.c.book_id, func.count())
+        .group_by(_reread_pages_sq.c.book_id)
+        .all()
+    )
+    reread_books: list[dict] = []
+    if reread_counts:
+        rr_ids = list(reread_counts.keys())
+        rr_totals = dict(
+            db.query(_PageStat.book_id, func.max(_PageStat.total_pages))
+            .filter(_PageStat.user_id == current_user.id, _PageStat.book_id.in_(rr_ids))
+            .group_by(_PageStat.book_id).all()
+        )
+        rr_meta = {
+            b.id: b for b in db.query(Book).filter(
+                Book.id.in_(rr_ids), Book.status == "active",
+                book_visibility_filter(db, current_user),
+            )
+        }
+        for bid, n in reread_counts.items():
+            bk = rr_meta.get(bid)
+            if not bk or int(n) < 3:          # ignore 1–2 stray revisited pages
+                continue
+            total = int(rr_totals.get(bid) or 0)
+            reread_books.append({
+                "book_id": bid, "title": bk.title, "author": bk.author,
+                "has_cover": bool(bk.cover_path),
+                "reread_pages": int(n), "total_pages": total,
+                "pct": round(int(n) / total * 100, 1) if total else 0,
+            })
+        reread_books.sort(key=lambda b: b["reread_pages"], reverse=True)
+    rereads = {"books": reread_books}
+
     return {
         "range_days": effective_days,
         "headline": {
@@ -939,6 +987,7 @@ def get_stats(
         "words": words,
         "wpm": wpm,
         "book_lengths": book_lengths,
+        "rereads": rereads,
     }
 
 
@@ -971,6 +1020,9 @@ def get_completion_estimates(
         .all()
     )
 
+    from backend.models.ko_stats import PageStat
+    window_epoch = int(window_start.replace(tzinfo=timezone.utc).timestamp())
+
     result = []
     for row in in_progress:
         # Normalise progress to 0–100
@@ -997,8 +1049,33 @@ def get_completion_estimates(
         total_secs_30 = int(session_rows.total_secs) if session_rows and session_rows.total_secs else 0
         session_count = int(session_rows.session_count) if session_rows and session_rows.session_count else 0
 
+        # Honest progress + pace from imported KOReader page-stats, when present:
+        # distinct pages read ÷ real total_pages, and a page-stats reading-day
+        # count so device-only books (no live sessions) still get an estimate.
+        ps = (
+            db.query(
+                func.count(func.distinct(PageStat.page)),
+                func.max(PageStat.total_pages),
+                func.count(func.distinct(case((PageStat.start_time >= window_epoch, PageStat.page)))),
+                func.count(func.distinct(case((PageStat.start_time >= window_epoch,
+                                               func.cast(PageStat.start_time / 86400, Integer))))),
+            )
+            .filter(PageStat.user_id == current_user.id, PageStat.book_id == row.id)
+            .one()
+        )
+        ps_pages, ps_total, ps_pages_30, ps_days_30 = (int(ps[0] or 0), int(ps[1] or 0),
+                                                       int(ps[2] or 0), int(ps[3] or 0))
+        ps_days_30 = max(ps_days_30 - (1 if ps_pages_30 else 0), 0)  # gained over the gaps, not the first day
+        if ps_total > 0:
+            progress = min(round(ps_pages / ps_total * 100, 1), 100.0)
+
         estimated_days: Optional[int] = None
-        if session_count > 0 and progress >= 5 and progress < 100:
+        if session_count == 0 and ps_total > 0 and ps_pages_30 > 0 and ps_days_30 >= 1 and progress < 100:
+            # Device-only: pages read per active-day → days to read the rest.
+            pages_per_day = ps_pages_30 / ps_days_30
+            remaining_pages = max(ps_total - ps_pages, 0)
+            estimated_days = max(1, round(remaining_pages / pages_per_day)) if pages_per_day else None
+        elif session_count > 0 and progress >= 5 and progress < 100:
             # Calculate progress gained during the window
             earliest_pct = session_rows.earliest_progress or 0.0
             # Normalise earliest_pct the same way as progress (0-1 → 0-100)
@@ -1011,9 +1088,12 @@ def get_completion_estimates(
             remaining = 100.0 - progress
             estimated_days = max(1, round(remaining / progress_per_day))
 
-        if session_count >= 5:
+        # Confidence from whichever signal drove the estimate (live sessions or
+        # page-stat reading-days for device-only books).
+        evidence = max(session_count, ps_days_30)
+        if evidence >= 5:
             confidence = "high"
-        elif session_count >= 2:
+        elif evidence >= 2:
             confidence = "medium"
         else:
             confidence = "low"
