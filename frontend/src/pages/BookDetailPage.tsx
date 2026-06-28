@@ -1599,6 +1599,21 @@ function StatsLayoutHero({ own, aggregate, bookId, onChange }: StatsLayoutProps)
           <ActivityChart timeline={own.session_timeline} />
         </div>
       )}
+      {/* Current progress — only when there's no journey line (device books).
+          Web books already show their % in the journey line's header, so this
+          avoids two "Progress" rows saying the same thing. */}
+      {own.progress != null && own.progress > 0 &&
+        !own.session_timeline.some(d => d.progress_pct != null) && (
+        <div className="mt-4">
+          <div className="flex items-center justify-between mb-1.5">
+            <span className="text-xs text-muted-foreground/70">Progress</span>
+            <span className="text-xs font-medium tabular-nums text-foreground">{Math.round(own.progress * 100)}%</span>
+          </div>
+          <div className="h-1.5 rounded-full bg-muted overflow-hidden">
+            <div className="h-full rounded-full bg-primary" style={{ width: `${Math.min(Math.round(own.progress * 100), 100)}%` }} />
+          </div>
+        </div>
+      )}
       <SourceSplit sources={own.by_source} />
       {/* Dates row — hairline-divided columns, no boxes */}
       {bottomStats.length > 0 && (
