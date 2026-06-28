@@ -107,6 +107,28 @@ export function TrueWpm({ data }: { data: StatsResponse['wpm'] }) {
   )
 }
 
+// 4 ── Re-reads: books whose pages you've revisited on a later day ──────────────
+export function ReReads({ data }: { data: StatsResponse['rereads'] }) {
+  if (!data || data.books.length === 0) return <Empty text="No re-reads yet — pages you revisit on a later day show up here." />
+  return (
+    <div className="flex flex-col gap-2.5">
+      {data.books.slice(0, 8).map((b) => (
+        <div key={b.book_id} className="flex items-center gap-2.5">
+          <Cover id={b.book_id} has={b.has_cover} alt="" />
+          <div className="min-w-0 flex-1">
+            <a href={`/books/${b.book_id}`} className="line-clamp-1 text-sm font-medium text-foreground transition-colors hover:text-primary">{b.title}</a>
+            {b.author && <p className="truncate text-xs text-muted-foreground">{b.author}</p>}
+          </div>
+          <span className="shrink-0 text-right text-sm font-bold tabular-nums text-foreground">
+            {b.reread_pages.toLocaleString()}
+            <span className="ml-0.5 text-[10px] font-normal text-muted-foreground">pages{b.pct ? ` · ${b.pct}%` : ''}</span>
+          </span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 // 3 ── Book Length: word-count distribution of finished books + avg/median ───────
 export function BookLength({ data }: { data: StatsResponse['book_lengths'] }) {
   const { accent, tick, cursor } = useChartColors()

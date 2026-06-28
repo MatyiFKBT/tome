@@ -76,6 +76,9 @@ export interface StatsResponse {
     by_year: { year: number; avg_words: number; count: number }[]
     books: { book_id: number; title: string; has_cover: boolean; words: number; finished: string | null }[]
   }
+  rereads: {
+    books: { book_id: number; title: string; author: string | null; has_cover: boolean; reread_pages: number; total_pages: number; pct: number }[]
+  }
 }
 
 export interface CompletionEstimate {

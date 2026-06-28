@@ -7,6 +7,16 @@ All notable changes to Tome are documented here. Format loosely follows
 ## [Unreleased]
 
 ### Added
+- **Per-page reading stats from your KOReader history.** Once you've imported your
+  device's reading history, each book page gains a **Reading intensity** strip —
+  where your time actually went across the book, page by page — plus an honest
+  **"X of Y pages"** read (from the real page count, not a guess) and a note when
+  you've re-read stretches. A book's reading stats (time, pages, dates, pace) now
+  also reflect that imported history, so books you only ever read on the device
+  are no longer shown as blank. On the dashboard, a new **Re-reads** tile (from the
+  tile gallery) ranks the books whose pages you keep coming back to, and the
+  **Completion Estimates** tile now measures progress by real pages turned — so it
+  works for device reading too, not just the web reader.
 - **The sidebar now follows you onto every page.** Stats, Highlights, Wishlist and
   the Bindery used to drop you onto a bare screen with only a back-arrow — to get
   from your stats to your highlights you had to bounce back through Home first.

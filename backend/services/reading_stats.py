@@ -10,7 +10,7 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import func
+from sqlalchemy import func, Integer
 from sqlalchemy.orm import Session
 
 from backend.models.book import Book
@@ -99,6 +99,61 @@ def compute_book_reading_stats(
         {"date": row.date, "seconds": int(row.seconds), "pages": int(row.pages)}
         for row in timeline_rows
     ]
+
+    # ── Reconcile with imported KOReader page-stats ──────────────────────────
+    # Page-stats win per book (same rule as the dashboard's reconciled_reading),
+    # so a book read only on the device isn't shown empty. Untouched when the
+    # book has no page-stats — ps_seconds is 0 and this whole block is skipped.
+    from backend.models.ko_stats import PageStat
+
+    ps = (
+        db.query(
+            func.coalesce(func.sum(PageStat.duration_seconds), 0),
+            func.count(func.distinct(PageStat.page)),
+            func.min(PageStat.start_time),
+            func.max(PageStat.start_time),
+            func.max(PageStat.total_pages),
+        )
+        .filter(PageStat.user_id == user_id, PageStat.book_id == book_id)
+        .one()
+    )
+    ps_seconds = int(ps[0] or 0)
+    if ps_seconds > 0:
+        total_seconds = ps_seconds
+        pages_turned = int(ps[1] or 0)          # distinct pages genuinely read
+        ps_total_pages = int(ps[4] or 0)
+        # Daily buckets from page-stats (local-day = start_time // 86400, UTC).
+        day_rows = (
+            db.query(
+                func.cast(PageStat.start_time / 86400, Integer).label("day"),
+                func.coalesce(func.sum(PageStat.duration_seconds), 0).label("seconds"),
+                func.count(func.distinct(PageStat.page)).label("pages"),
+            )
+            .filter(PageStat.user_id == user_id, PageStat.book_id == book_id)
+            .group_by("day")
+            .order_by("day")
+            .all()
+        )
+        session_timeline = [
+            {
+                "date": datetime.fromtimestamp(int(r.day) * 86400, timezone.utc).strftime("%Y-%m-%d"),
+                "seconds": int(r.seconds),
+                "pages": int(r.pages),
+            }
+            for r in day_rows
+        ]
+        sessions = len(session_timeline)        # one "session" per reading day
+        avg_session_seconds = round(total_seconds / sessions) if sessions else 0
+        if ps[2]:
+            first_read = datetime.fromtimestamp(int(ps[2]), timezone.utc).isoformat()
+        if ps[3]:
+            last_read = datetime.fromtimestamp(int(ps[3]), timezone.utc).isoformat()
+        total_minutes = total_seconds / 60.0
+        if total_minutes > 0 and pages_turned > 0:
+            pace_pages_per_min = round(pages_turned / total_minutes, 2)
+        # Real page-based progress beats a stale stored progress_pct.
+        if ps_total_pages > 0:
+            progress = min(pages_turned / ps_total_pages, 1.0)
 
     # ── Estimated time to finish ─────────────────────────────────────────────
     estimated_finish_seconds: Optional[int] = None

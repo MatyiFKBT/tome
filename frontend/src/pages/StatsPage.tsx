@@ -9,7 +9,7 @@ import 'react-resizable/css/styles.css'
 import { Link } from 'react-router-dom'
 import { AppShell } from '@/components/AppShell'
 import { toPng } from 'html-to-image'
-import { Plus, RotateCcw, X, BarChart3, HelpCircle, Sparkles, SlidersHorizontal, Pencil, Check, GripVertical, Calendar, ChevronLeft, ChevronRight, Clock, Activity, BookCheck, Flame, FileText, Target, Gauge, Search, Copy, Loader2, CloudOff, Download, Upload, ImageDown, Star, TrendingUp, ScatterChart as ScatterIcon, Trophy, Globe, Library as LibraryIcon, Clock3, Infinity as InfinityIcon, Type, Ruler, type LucideIcon } from 'lucide-react'
+import { Plus, RotateCcw, X, BarChart3, HelpCircle, Sparkles, SlidersHorizontal, Pencil, Check, GripVertical, Calendar, ChevronLeft, ChevronRight, Clock, Activity, BookCheck, Flame, FileText, Target, Gauge, Search, Copy, Loader2, CloudOff, Download, Upload, ImageDown, Star, TrendingUp, ScatterChart as ScatterIcon, Trophy, Globe, Library as LibraryIcon, Clock3, Infinity as InfinityIcon, Type, Ruler, Repeat, type LucideIcon } from 'lucide-react'
 import { cn, formatDate, formatDuration } from '@/lib/utils'
 import { api } from '@/lib/api'
 import { BookAnimation } from '@/components/BookAnimation'
@@ -72,6 +72,7 @@ import {
   WordsRead,
   TrueWpm,
   BookLength,
+  ReReads,
 } from '@/components/stats/widgets/wordstats'
 
 /**
@@ -559,6 +560,16 @@ const WIDGETS: WidgetDef[] = [
     fixedWindow: 'all',
     render: ({ stats }) => <BookLength data={stats.book_lengths} />,
   },
+  {
+    id: 'rereads',
+    title: 'Re-reads',
+    icon: Repeat,
+    size: { w: 4, h: 3, minW: 3, minH: 2 },
+    autoH: true,
+    fixedWindow: 'all',
+    defaultConfig: { chartType: 'bar', days: 0, autoFit: true },
+    render: ({ stats }) => <ReReads data={stats.rereads} />,
+  },
 ]
 
 const defById = (id: string) => WIDGETS.find((w) => w.id === id.replace(/--[a-z0-9]+$/, ''))!
@@ -614,6 +625,7 @@ const WIDGET_DESC: Record<string, string> = {
   'words-read': 'Lifetime words read, by year',
   'true-wpm': 'Your real reading speed — words ÷ time',
   'book-length': 'How long the books you finish are',
+  'rereads': 'Books whose pages you revisit',
 }
 
 // Widgets that are a number/short text — render their preview at natural size (no scale).
@@ -638,7 +650,7 @@ const GALLERY_GROUPS: { label: string; ids: string[] }[] = [
   },
   {
     label: 'Library',
-    ids: ['year-in-review', 'library-completion', 'series-completion', 'series-spotlight', 'author-affinity', 'completion-by-type', 'category-breakdown', 'genre-over-time', 'reading-by-language', 'library-growth', 'personal-records', 'book-length', 'per-book-table'],
+    ids: ['year-in-review', 'library-completion', 'series-completion', 'series-spotlight', 'author-affinity', 'completion-by-type', 'category-breakdown', 'genre-over-time', 'reading-by-language', 'library-growth', 'personal-records', 'book-length', 'rereads', 'per-book-table'],
   },
   {
     label: 'Taste',
