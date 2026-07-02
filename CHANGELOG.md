@@ -57,6 +57,20 @@ All notable changes to Tome are documented here. Format loosely follows
   Small "i" hints explain the progress and reading-intensity charts in plain language.
 
 ### Fixed
+- **Metadata fetching got a deep overhaul.** The same book returned by two
+  sources used to eat two of the five result slots — each copy *partial*
+  (Hardcover knows series but not language; Google the reverse). Duplicates are
+  now merged across sources into one complete candidate, results are ranked by
+  the same relevance score everywhere (the right volume of a series now beats
+  the wrong volume from a "better" source), and every path — the fetch dialog,
+  bulk review, bulk apply, Bindery, auto-import — agrees on what the best match
+  is. Rate limits are handled honestly: sources are retried once with a pause,
+  and when one is still throttled the dialog says so instead of pretending the
+  book doesn't exist. Three more sharp edges filed down: auto-import no longer
+  renames a book on a low-confidence match (it fills blanks instead), applying
+  fetched metadata no longer wipes your hand-added tags, and bulk fetching
+  paces itself instead of firing a hundred parallel searches that tripped the
+  very rate limits above.
 - **Deleting a highlight from the web now sticks, even for a highlight you just
   made.** The deletion marker was stamped with the server's clock, but compared
   against the device's local wall-clock — so with a UTC server and a device in a

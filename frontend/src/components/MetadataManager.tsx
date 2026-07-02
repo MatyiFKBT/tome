@@ -220,9 +220,10 @@ function ReviewFlow({ queue, onBack, onBookUpdated }: ReviewFlowProps) {
     setFields([])
     try {
       const qs = q?.trim() ? `?q=${encodeURIComponent(q)}` : ''
-      const data = await fetch(`${API}/api/books/${id}/fetch-metadata${qs}`, {
+      const resp = await fetch(`${API}/api/books/${id}/fetch-metadata${qs}`, {
         headers: authHeader(),
-      }).then(r => r.json()) as MetadataCandidate[]
+      }).then(r => r.json()) as { candidates: MetadataCandidate[] }
+      const data = resp.candidates ?? []
       setCandidates(data)
       if (data.length > 0 && book) {
         setSelectedCandidate(data[0])
