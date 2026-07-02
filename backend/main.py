@@ -174,6 +174,13 @@ async def lifespan(app: FastAPI):
         if an_cols and "cfi" not in an_cols:
             conn.execute(text("ALTER TABLE annotations ADD COLUMN cfi TEXT"))
             conn.commit()
+        # Release detection stores the tracker's latest volume title + date on
+        # follows (wishes table pre-exists on upgraded installs).
+        wi_cols = {r[1] for r in conn.execute(text("PRAGMA table_info(wishes)")).fetchall()}
+        if wi_cols and "latest_known_title" not in wi_cols:
+            conn.execute(text("ALTER TABLE wishes ADD COLUMN latest_known_title VARCHAR(512)"))
+            conn.execute(text("ALTER TABLE wishes ADD COLUMN latest_release_date VARCHAR(10)"))
+            conn.commit()
     ReadingGoal.__table__.create(bind=engine, checkfirst=True)
     init_fts(engine)
     backfill_fts(engine)
@@ -196,15 +203,22 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("Auto-import disabled (set TOME_AUTO_IMPORT=true to enable)")
 
+    release_task: asyncio.Task | None = None
+    if settings.release_detection:
+        logger.info("Release detection enabled — checking follows every %d seconds",
+                    settings.release_check_interval)
+        release_task = asyncio.create_task(_release_check_loop())
+
     yield
 
-    # Shutdown: cancel the background task cleanly
-    if auto_import_task is not None:
-        auto_import_task.cancel()
-        try:
-            await auto_import_task
-        except asyncio.CancelledError:
-            pass
+    # Shutdown: cancel the background tasks cleanly
+    for task in (auto_import_task, release_task):
+        if task is not None:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
 
 
 async def _auto_import_loop() -> None:
@@ -217,6 +231,28 @@ async def _auto_import_loop() -> None:
             raise
         except Exception:
             logger.exception("Unhandled error in auto-import loop")
+
+
+async def _release_check_loop() -> None:
+    """Background task: poll Hardcover for new volumes of followed series.
+
+    The per-follow due check lives in check_follows (last_checked_at vs the
+    configured interval); this loop just wakes hourly to see if anything is due,
+    so a long interval doesn't need a long sleep to survive restarts.
+    """
+    from backend.core.database import SessionLocal
+    from backend.services.release_detection import check_follows
+    while True:
+        try:
+            await asyncio.sleep(min(3600, settings.release_check_interval))
+            with SessionLocal() as db:
+                result = await check_follows(db)
+            if result.get("notified"):
+                logger.info("Release detection: %s", result)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Unhandled error in release-check loop")
 
 
 async def _run_auto_import() -> None:

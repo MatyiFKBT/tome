@@ -45,10 +45,10 @@ def list_wishes(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Return the current user's wishes."""
+    """Return the current user's wishes (kind="wish" — follows live at /wishlist/follows)."""
     require_role(current_user, "member")
 
-    q = db.query(Wish).filter(Wish.user_id == current_user.id)
+    q = db.query(Wish).filter(Wish.user_id == current_user.id, Wish.kind == "wish")
     if status:
         q = q.filter(Wish.status == status)
     wishes = q.order_by(Wish.created_at.desc()).all()
@@ -143,6 +143,152 @@ def series_search_available(_: User = Depends(get_current_user)) -> dict:
     """Series search is Hardcover-only — the add dialog hides the Series tab when
     no Hardcover token is configured (book search still works via Google/OL)."""
     return {"available": bool(settings.hardcover_token)}
+
+
+# ── Follows (release detection) ──────────────────────────────────────────────
+# A follow is a Wish with kind="follow": the columns reserved by the wishlist
+# plan (external_series_id / last_checked_at / latest_known_index) come alive.
+# Gated by TOME_RELEASE_DETECTION; the poller lives in services/release_detection.
+
+from pydantic import BaseModel as _BaseModel
+
+
+class FollowCreate(_BaseModel):
+    name: str                      # series name (display + library matching)
+    source_id: Optional[str] = None  # Hardcover series id; resolved by name if absent
+    author: Optional[str] = None
+    cover_url: Optional[str] = None
+
+
+def _require_detection():
+    if not settings.release_detection:
+        raise HTTPException(status_code=403, detail="Release detection is disabled (TOME_RELEASE_DETECTION)")
+
+
+def _follow_out(db: Session, current_user: User, w: Wish) -> dict:
+    # Highest volume of this series already in the library (visibility-gated).
+    from sqlalchemy import func as _f
+    from backend.core.permissions import book_visibility_filter
+    owned_q = db.query(_f.max(Book.series_index)).filter(
+        Book.series == w.series, Book.status == "active",
+    )
+    vis = book_visibility_filter(db, current_user)
+    if vis is not True:
+        owned_q = owned_q.filter(vis)
+    owned = owned_q.scalar()
+    return {
+        "id": w.id,
+        "name": w.title,
+        "author": w.author,
+        "cover_url": w.cover_url,
+        "source_id": w.source_id,
+        "latest_known_index": w.latest_known_index,
+        "latest_known_title": w.latest_known_title,
+        "latest_release_date": w.latest_release_date,
+        "owned_max_index": float(owned) if owned is not None else None,
+        "last_checked_at": w.last_checked_at.isoformat() + "Z" if w.last_checked_at else None,
+        "created_at": w.created_at.isoformat() + "Z" if w.created_at else None,
+    }
+
+
+@router.get("/wishlist/follows")
+def list_follows(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """The current user's followed series, with the tracker vs library state."""
+    require_role(current_user, "member")
+    _require_detection()
+    rows = (
+        db.query(Wish)
+        .filter(Wish.user_id == current_user.id, Wish.kind == "follow", Wish.status == "open")
+        .order_by(Wish.created_at.desc())
+        .all()
+    )
+    return [_follow_out(db, current_user, w) for w in rows]
+
+
+@router.post("/wishlist/follow", status_code=201)
+async def follow_series(
+    payload: FollowCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Follow a series: resolve it on Hardcover, prime the release watermark.
+
+    Priming means only releases AFTER following notify — following a
+    27-volume series doesn't fire 27 alerts.
+    """
+    require_role(current_user, "member")
+    _require_detection()
+    from backend.services.metadata_fetch import search_series
+    from backend.services.release_detection import fetch_series_latest
+    from datetime import datetime as _dt
+
+    name = payload.name.strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="name must not be empty")
+
+    sid = payload.source_id
+    author, cover = payload.author, payload.cover_url
+    if not sid:
+        hits = await search_series(name)
+        if not hits:
+            raise HTTPException(status_code=404, detail="Series not found on Hardcover")
+        best = hits[0]
+        sid, name = best["source_id"], best["name"]
+        author = author or best.get("author")
+        cover = cover or best.get("cover_url")
+
+    dup = (
+        db.query(Wish)
+        .filter(Wish.user_id == current_user.id, Wish.kind == "follow",
+                Wish.external_series_id == str(sid), Wish.status == "open")
+        .first()
+    )
+    if dup:
+        raise HTTPException(status_code=409, detail="Already following this series")
+
+    wish = Wish(
+        user_id=current_user.id, kind="follow", status="open",
+        title=name, series=name, author=author, cover_url=cover,
+        source="hardcover", source_id=f"series:{sid}",
+        external_series_id=str(sid),
+    )
+    db.add(wish)
+    db.flush()
+
+    state = await fetch_series_latest(int(sid))
+    if state:
+        wish.latest_known_index = state["latest_index"]
+        wish.latest_known_title = state.get("latest_title")
+        wish.latest_release_date = state.get("release_date")
+        wish.last_checked_at = _dt.utcnow()
+
+    db.commit()
+    db.refresh(wish)
+    audit(
+        db,
+        "wishlist.follow",
+        user_id=current_user.id,
+        username=current_user.username,
+        resource_type="wish",
+        resource_id=wish.id,
+        details={"series": name, "hardcover_id": str(sid)},
+    )
+    return _follow_out(db, current_user, wish)
+
+
+@router.post("/admin/release-check")
+async def admin_release_check(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Run the release-detection poll for every open follow, right now."""
+    require_role(current_user, "admin")
+    _require_detection()
+    from backend.services.release_detection import check_follows
+    return await check_follows(db, force=True)
 
 
 # ── Admin endpoints ───────────────────────────────────────────────────────────
