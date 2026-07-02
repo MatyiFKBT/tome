@@ -974,10 +974,12 @@ ones, and apply fixes with user approval.
 
 - `/scribe audit` — all books (null/missing fields + series drift)
 - `/scribe audit years [scope]` — publication-year drift check (see "Year-drift audit" subsection below)
+- `/scribe audit editions [scope]` — wrong-edition ISBN check for manga/light-novel libraries (see "Edition audit" subsection below)
 - "audit metadata" / "find books with missing metadata"
 - "audit the manga library" / "audit books in Light Novels"
 - "audit books by X"
 - "audit years", "check publication years", "verify years for tarzan"
+- "audit editions", "check for wrong-edition ISBNs", "is any light novel carrying a manga ISBN"
 
 Narrow scope is parsed with the same natural-language interpretation as
 Update mode Step U1.
@@ -1113,6 +1115,71 @@ first-pub years are usually correct in OL even if pre-modern.
 **Never** auto-apply year corrections without surfacing them.  Even perfect
 confidence requires explicit user approval — same rule as series title
 drift.
+
+---
+
+### Edition audit (trigger: `/scribe audit editions [scope]`)
+
+**Motivation:** older Tome versions auto-applied the top metadata candidate
+blindly, which could write the WRONG edition's identity onto a book — the
+manga adaptation's ISBN (and sometimes publisher/description) on a light
+novel, or vice versa.  A wrong stored ISBN then *monopolises* every later
+fetch (ISBN queries dominate retrieval), so the damage self-perpetuates
+until the ISBN itself is corrected.  This check found and fixed 5 such books
+on a real 560-book library (4 Slime LNs + 1 Black Summoner LN carrying manga
+ISBNs).
+
+**Scope:** books that have an ISBN **and** a book type classifying as
+sequential-art (manga/comics/webtoon-like slugs) or light-novel/prose.
+Resolve `book_type_id → slug` via `GET /api/book-types`.  Books without an
+ISBN or with untyped/other types are skipped.
+
+**Detection is fetch-based** (like year drift): for each book in scope call
+`GET /api/books/<id>/fetch-metadata` in batches of 4 (external sources are
+rate-limited; if the response carries `sources` with `"hardcover":
+"rate_limited"`, pause 60 s and retry that book — do not classify a
+rate-limited response).  Handle both response shapes: newer servers return
+`{"candidates": [...], "sources": {...}}`, older ones a bare list.
+
+Classify by finding the candidate whose `isbn` equals the stored ISBN:
+
+| Observation | Status |
+|-------------|--------|
+| Stored-ISBN candidate title contains `(Manga)` but the book type is light-novel/prose | **wrong_edition** |
+| Stored-ISBN candidate title contains `(Light Novel)` but the book type is sequential-art | **wrong_edition** |
+| Stored-ISBN candidate matches the book's edition class | match |
+| No candidate carries the stored ISBN | no_signal |
+| Stored-ISBN candidate has no edition label in its title | unlabelled (fine — most single-edition series are unlabelled) |
+
+**Correction:** the same fetch response usually already contains the right
+edition (newer servers bias retrieval toward the book's edition when the
+stored ISBN looks suspect).  Pick the top candidate that (a) does NOT
+violate the edition class and (b) matches the volume (`series_index`
+equal).  Propose a patch of `isbn` (always) plus `publisher`, `year` and
+`description` from that candidate — the old auto-apply usually poisoned
+those too.  Do NOT touch title, series or cover (covers were typically
+corrected by hand long ago; check before clobbering).
+
+State file: `~/.cache/tome-scribe/.scribe-audit-editions-<profile>-<timestamp>.json`,
+same conventions as the year audit (persist per fetch, resumable, delete on
+clean completion).
+
+Present findings compactly and require explicit approval, same options as
+the year audit (`accept all` / `skip #N` / `show #N` / `cancel`):
+
+```
+333 books scanned · 5 wrong edition · 60 match · 251 unlabelled · 17 no signal
+
+Wrong-edition ISBNs:
+  #id=54  "That Time I Got Reincarnated as a Slime" (light_novel, vol 13)
+          stored 9781646510078 → "…(Manga), Vol. 13" [Kodansha Comics]
+          fix    9781975314460 → "…(Light Novel), Vol. 13" [Yen On]
+  ...
+```
+
+On apply, `POST /api/books/{id}/apply-metadata` with only the proposed
+fields.  Re-verify by re-fetching once and confirming the stored-ISBN
+candidate now matches the edition class.
 
 ---
 
