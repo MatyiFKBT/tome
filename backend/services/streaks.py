@@ -1,32 +1,17 @@
 """Shared reading-streak computation.
 
-Buckets sessions by the user's local day with a 4-hour rollover, so a session
-started at 01:30 CEST still counts toward the previous day's bedtime read.
+Buckets sessions by the user's reading day (local day with a 4-hour rollover —
+see ``backend/services/reading_day.py``), so a session started at 01:30 CEST
+still counts toward the previous day's bedtime read.
 """
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from backend.models.tome_sync import ReadingSession
-
-ROLLOVER_HOURS = 4
-
-
-def _effective_hours(tz_offset_minutes: int, rollover_hours: int = ROLLOVER_HOURS) -> int:
-    # JS getTimezoneOffset: minutes, negative = east of UTC (e.g. CEST → -120)
-    tz_hours = -(tz_offset_minutes // 60)
-    return tz_hours - rollover_hours
-
-
-def date_modifier(tz_offset_minutes: int, rollover_hours: int = ROLLOVER_HOURS) -> str:
-    """SQLite date() modifier that maps a UTC timestamp to its local day with rollover."""
-    return f"{_effective_hours(tz_offset_minutes, rollover_hours):+d} hours"
-
-
-def effective_today(tz_offset_minutes: int, rollover_hours: int = ROLLOVER_HOURS) -> date:
-    """The user's current 'reading day' — what walking back a streak should start from."""
-    return (datetime.utcnow() + timedelta(hours=_effective_hours(tz_offset_minutes, rollover_hours))).date()
+# Re-exported for existing importers; the canonical home is reading_day.
+from backend.services.reading_day import ROLLOVER_HOURS, date_modifier, effective_today  # noqa: F401
 
 
 def streaks_from_dates(day_set: set[date], today: date) -> tuple[int, int]:

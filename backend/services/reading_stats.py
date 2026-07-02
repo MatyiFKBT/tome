@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from backend.models.book import Book
 from backend.models.tome_sync import ReadingSession
 from backend.models.user_book_status import UserBookStatus
+from backend.services.reading_day import date_modifier, effective_today, epoch_day, epoch_day_int
 
 
 # ── Per-book, per-user ────────────────────────────────────────────────────────
@@ -25,8 +26,12 @@ def compute_book_reading_stats(
     *,
     user_id: int,
     book_id: int,
+    tz_offset: int = 0,
 ) -> dict:
     """Return reading statistics for one user on one book.
+
+    ``tz_offset`` (JS getTimezoneOffset minutes) buckets the timeline/momentum
+    by the user's reading day — local day with 4h rollover, matching streaks.
 
     Returns a dict with keys:
       total_seconds, sessions, pages_turned, avg_session_seconds,
@@ -84,15 +89,16 @@ def compute_book_reading_stats(
     # progress_pct is stored as 0-1 fraction in UserBookStatus
     progress: Optional[float] = status_row.progress_pct if status_row else None
 
-    # ── Session timeline — daily buckets ─────────────────────────────────────
+    # ── Session timeline — reading-day buckets ────────────────────────────────
+    day_mod = date_modifier(tz_offset)
     timeline_rows = (
         base.with_entities(
-            func.date(ReadingSession.started_at).label("date"),
+            func.date(ReadingSession.started_at, day_mod).label("date"),
             func.coalesce(func.sum(ReadingSession.duration_seconds), 0).label("seconds"),
             func.coalesce(func.sum(ReadingSession.pages_turned), 0).label("pages"),
         )
-        .group_by(func.date(ReadingSession.started_at))
-        .order_by(func.date(ReadingSession.started_at))
+        .group_by(func.date(ReadingSession.started_at, day_mod))
+        .order_by(func.date(ReadingSession.started_at, day_mod))
         .all()
     )
     session_timeline = [
@@ -126,10 +132,10 @@ def compute_book_reading_stats(
         pages_turned = int(ps[1] or 0)          # distinct pages genuinely read
         ps_total_pages = int(ps[4] or 0)
         ps_max_page = int(ps[5] or 0)           # furthest page reached (position fallback)
-        # Daily buckets from page-stats (local-day = start_time // 86400, UTC).
+        # Daily buckets from page-stats, by reading day (local + 4h rollover).
         day_rows = (
             db.query(
-                func.cast(PageStat.start_time / 86400, Integer).label("day"),
+                epoch_day(PageStat.start_time, tz_offset).label("day"),
                 func.coalesce(func.sum(PageStat.duration_seconds), 0).label("seconds"),
                 func.count(func.distinct(PageStat.page)).label("pages"),
             )
@@ -139,11 +145,7 @@ def compute_book_reading_stats(
             .all()
         )
         session_timeline = [
-            {
-                "date": datetime.fromtimestamp(int(r.day) * 86400, timezone.utc).strftime("%Y-%m-%d"),
-                "seconds": int(r.seconds),
-                "pages": int(r.pages),
-            }
+            {"date": r.day, "seconds": int(r.seconds), "pages": int(r.pages)}
             for r in day_rows
         ]
         sessions = len(session_timeline)        # one "session" per reading day
@@ -170,10 +172,10 @@ def compute_book_reading_stats(
         # Web sessions: the furthest progress_end reached on each day.
         prog_rows = (
             base.with_entities(
-                func.date(ReadingSession.started_at).label("date"),
+                func.date(ReadingSession.started_at, day_mod).label("date"),
                 func.max(ReadingSession.progress_end).label("p"),
             )
-            .group_by(func.date(ReadingSession.started_at))
+            .group_by(func.date(ReadingSession.started_at, day_mod))
             .all()
         )
         for r in prog_rows:
@@ -193,7 +195,7 @@ def compute_book_reading_stats(
             db.query(
                 func.coalesce(PageStat.device, "koreader").label("device"),
                 func.coalesce(func.sum(PageStat.duration_seconds), 0).label("seconds"),
-                func.count(func.distinct(func.cast(PageStat.start_time / 86400, Integer))).label("units"),
+                func.count(func.distinct(epoch_day(PageStat.start_time, tz_offset))).label("units"),
             )
             .filter(PageStat.user_id == user_id, PageStat.book_id == book_id)
             .group_by("device")
@@ -216,7 +218,8 @@ def compute_book_reading_stats(
     ]
 
     # ── Reading momentum: last 7 days vs the 7 before ─────────────────────────
-    today = datetime.now(timezone.utc).date()
+    # "Today" is the user's current reading day, matching the timeline buckets.
+    today = effective_today(tz_offset)
     recent_seconds = prior_seconds = 0
     for row in session_timeline:
         try:
@@ -304,6 +307,7 @@ def compute_book_page_intensity(
     user_id: int,
     book_id: int,
     bins: int = 50,
+    tz_offset: int = 0,
 ) -> Optional[dict]:
     """Per-page reading intensity for one book, from imported KOReader page-stats.
 
@@ -353,8 +357,8 @@ def compute_book_page_intensity(
         total_seconds += dur
         distinct_pages.add(int(page))
         latest_total_pages = max(latest_total_pages, int(total_pages))
-        # local-day bucket (page revisited on a different day ⇒ a re-read)
-        bin_days[b].add(int(start_time) // 86400 if start_time else 0)
+        # reading-day bucket (page revisited on a different day ⇒ a re-read)
+        bin_days[b].add(epoch_day_int(int(start_time), tz_offset) if start_time else 0)
 
     pages_read = len(distinct_pages)
     pct_read = (
@@ -407,6 +411,8 @@ def compute_book_aggregate_stats(
         )
     }
     # Per-user page-stat totals (seconds, distinct reading days = "sessions").
+    # UTC days on purpose: this aggregates across ALL readers, so there is no
+    # single viewer timezone to bucket by — and only the day *count* is used.
     ps_by_user = {
         uid: (int(secs or 0), int(days or 0))
         for uid, secs, days in (

@@ -24,6 +24,7 @@ from backend.models.book import Book
 from backend.models.user import User
 from backend.models.user_book_status import UserBookStatus
 from backend.services import reconciled_reading as rr
+from backend.services.reading_day import date_modifier, effective_today
 
 # Per-axis vocabulary, tone-checked. Tuple is (low-pole word, high-pole word).
 _NOUN = {
@@ -76,8 +77,11 @@ def _lerp_score(v: float, lo: float, hi: float) -> float:
 
 def compute_reading_dna(db: Session, user: User, tz_offset: int) -> dict:
     now = datetime.utcnow()
+    # Plain local offset — used ONLY for the hour-of-day trait, where 1am must
+    # read as hour 1. Day-identity buckets use the reading-day modifier below.
     offset_hours = -(tz_offset // 60)
     tzm = f"{offset_hours:+d} hours"
+    day_mod = date_modifier(tz_offset)
     covered = rr.covered_book_ids(db, user.id)
 
     traits: dict[str, float] = {}
@@ -96,9 +100,11 @@ def compute_reading_dna(db: Session, user: User, tz_offset: int) -> dict:
         traits["time"] = _lerp_score(mean_hour, 8, 24)  # 8am→early, midnight→night
 
     # ── Rhythm (sporadic ↔ consistent) — active-day density, last 120d ───────────
-    adays = rr.active_days(db, user.id, tzm, covered)
+    # Reading-day buckets (4h rollover) so a midnight session doesn't split into
+    # two active days, and the user's own "today" — not the UTC date.
+    adays = rr.active_days(db, user.id, day_mod, covered)
     if adays:
-        today = now.date()
+        today = effective_today(tz_offset)
         window = 120
         first = min(adays)
         span = min(window, (today - first).days + 1)
@@ -128,7 +134,7 @@ def compute_reading_dna(db: Session, user: User, tz_offset: int) -> dict:
 
     # Pace (savorer ↔ speed demon) — true WPM = words ÷ reconciled read-time.
     if word_counts:
-        book_secs = rr.book_seconds(db, user.id, tzm, covered, None, None)
+        book_secs = rr.book_seconds(db, user.id, day_mod, covered, None, None)
         words_sum = secs_sum = counted = 0
         for r in finished:
             if not r.word_count:

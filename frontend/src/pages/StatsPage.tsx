@@ -1718,7 +1718,7 @@ export function StatsPage() {
   }, [days, custom])
 
   useEffect(() => {
-    api.get<CompletionEstimate[]>('/stats/completion-estimates').then(setEstimates).catch(() => {})
+    api.get<CompletionEstimate[]>(`/stats/completion-estimates?tz_offset=${new Date().getTimezoneOffset()}`).then(setEstimates).catch(() => {})
   }, [])
 
   const reloadGoals = useCallback(() => {
