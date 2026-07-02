@@ -88,6 +88,11 @@ All notable changes to Tome are documented here. Format loosely follows
   series blurb, genres, staff and cover, and its series-level description,
   author and genres back-fill volume-level hits from the other sources that
   are missing them.
+- **Scribe: `/scribe audit editions`.** A new audit check finds books whose
+  stored ISBN belongs to the wrong edition of their series (a light novel
+  carrying the manga's ISBN — damage older auto-apply versions could cause,
+  which then poisons every later fetch) and proposes the correct edition's
+  ISBN, publisher, year and description for approval.
 - **Repeat searches are served from a short-lived cache.** Identical source
   queries within 15 minutes (re-opening the fetch dialog, bulk-fetching a
   series whose volumes share a series-level lookup) no longer re-hit the
