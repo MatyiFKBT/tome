@@ -57,6 +57,11 @@ class Settings(BaseSettings):
     wishlist_enabled: bool = True   # env TOME_WISHLIST_ENABLED — kill switch, defaults on
     wishlist_max_open_per_user: int = 100  # env TOME_WISHLIST_MAX — soft cap per user
 
+    # Release detection (follow a series → "vol N is out" alerts). Off by
+    # default: it polls Hardcover on a schedule and needs TOME_HARDCOVER_TOKEN.
+    release_detection: bool = False        # env TOME_RELEASE_DETECTION
+    release_check_interval: int = 86400    # env TOME_RELEASE_CHECK_INTERVAL, seconds
+
     # Send-to-KOReader inbox (env TOME_SEND_TO_KOREADER). On by default since
     # v1.7.0 ("Signature") after real-hardware validation; the web UI queues a
     # book to be pulled onto KOReader by the TomeSync plugin's inbox (no

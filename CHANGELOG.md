@@ -7,6 +7,15 @@ All notable changes to Tome are documented here. Format loosely follows
 ## [Unreleased]
 
 ### Added
+- **Follow a series — get told when a new volume is out.** A new opt-in release
+  detector (set `TOME_RELEASE_DETECTION=true`; needs your Hardcover token) lets
+  members follow a series: Tome polls Hardcover on a schedule (daily by default,
+  `TOME_RELEASE_CHECK_INTERVAL`) and when the tracker's latest volume number
+  grows past what it saw at follow time, you get a bell notification — and an
+  email when SMTP is configured. Following starts silent: it primes at the
+  series' current latest volume, so following a 27-volume series doesn't fire
+  27 alerts. Follows live alongside your wishlist (`/api/wishlist/follow`,
+  `/api/wishlist/follows`), and admins can trigger a check on demand.
 - **Focus mode on the Home page.** A new minimalist Home view that surfaces the one
   book you're most likely to pick up next — your most-recently-synced in-progress
   title — as a large cover with the upcoming volumes of its series fanned behind it

@@ -187,6 +187,40 @@ def send_wish_fulfilled_email(to_email: str, wish: object, book: object = None) 
         log.exception("send_wish_fulfilled_email: failed to send to %s", to_email)
 
 
+def send_release_email(to_email: str, wish: object, state: dict) -> None:
+    """Notify a follower that a new volume of their series is out.
+
+    Only called when settings.smtp_configured is True; failures are swallowed
+    and logged — they must never block the detection cycle.
+    """
+    if not settings.smtp_configured:
+        return
+    try:
+        series = getattr(wish, "title", str(wish))
+        vol = state.get("latest_index")
+        vol_str = str(int(vol)) if vol is not None and float(vol).is_integer() else str(vol)
+        title = state.get("latest_title") or f"Volume {vol_str}"
+        released = f" (released {state['release_date']})" if state.get("release_date") else ""
+        body = (
+            f"A new volume of \"{series}\" is out: {title}{released}.\n\n"
+            "Manage the series you follow on your wishlist page: /wishlist\n\n"
+            "— Tome"
+        )
+        msg = MIMEText(body, "plain")
+        msg["From"] = settings.smtp_from_address
+        msg["To"] = to_email
+        msg["Subject"] = f"[Tome] New release: {series} vol. {vol_str}"
+
+        conn = _connect()
+        try:
+            conn.sendmail(settings.smtp_from_address, [to_email], msg.as_string())
+        finally:
+            conn.quit()
+        log.info("Release email sent to %s for '%s' vol %s", to_email, series, vol_str)
+    except Exception:
+        log.exception("send_release_email: failed to send to %s", to_email)
+
+
 def send_test_email(to_email: str) -> None:
     """Send a plain-text test email to verify SMTP config."""
     if not settings.smtp_configured:
