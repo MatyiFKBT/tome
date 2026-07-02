@@ -1223,27 +1223,44 @@ interface StatsLayoutProps {
 
 /** Activity bars (minutes per reading day) + an optional progress lane below.
  *  The progress lane is the per-book "journey" — % complete over calendar time —
- *  gated by `showProgress` so it only appears when there's no Reading-intensity
- *  chart (web/manual books); a book never stacks two look-alike area charts. */
+ *  drawn whenever the timeline carries 2+ progress points (the backend only
+ *  emits progress_pct where a position is actually known). */
 function ActivityChart({ timeline }: {
   timeline: { date: string; seconds: number; pages: number; progress_pct?: number | null }[]
 }) {
   if (timeline.length < 2) return null
-  const max = Math.max(...timeline.map(d => d.seconds), 1)
-  const n = timeline.length
-  const first = timeline[0]
-  const last = timeline[timeline.length - 1]
+  // Real time axis: fill the calendar days between the first and last reading
+  // day with zero bars. Active-days-only bars, evenly spaced, misrepresent the
+  // span (two adjacent bars could be one day or a month apart) — and with 2–3
+  // reading days they rendered as giant full-width slabs. Capped at the last
+  // 365 days so a years-long log can't produce more bars than pixels.
+  const byDate = new Map(timeline.map(d => [d.date, d]))
+  const startD = new Date(timeline[0].date + 'T00:00:00')
+  const endD = new Date(timeline[timeline.length - 1].date + 'T00:00:00')
+  let days: typeof timeline = []
+  for (const d = new Date(startD); d <= endD; d.setDate(d.getDate() + 1)) {
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+    days.push(byDate.get(key) ?? { date: key, seconds: 0, pages: 0 })
+  }
+  if (days.length > 365) days = days.slice(-365)
+  const max = Math.max(...days.map(d => d.seconds), 1)
+  const n = days.length
+  const first = days[0]
+  const last = days[days.length - 1]
   const fmtDay = (iso: string) =>
     new Date(iso + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
   // Progress journey: % complete on each reading day, drawn as a slim lane below.
-  const hasJourney = timeline.some(d => d.progress_pct != null)
-  const lanePts = (timeline
+  const hasJourney = days.some(d => d.progress_pct != null)
+  const lanePts = (days
     .map((d, i) => (d.progress_pct != null
       ? `${((i / (n - 1)) * 100).toFixed(2)},${(100 - d.progress_pct).toFixed(2)}`
       : null))
     .filter(Boolean) as string[])
-  const lastProgress = [...timeline].reverse().find(d => d.progress_pct != null)?.progress_pct ?? null
+  const lastProgress = [...days].reverse().find(d => d.progress_pct != null)?.progress_pct ?? null
   return (
+    // Always full card width — a narrower "day-sized bars" cap was tried and
+    // looked half-finished against the full-width card chrome. Big bars for a
+    // short history are fine; the gap-filled axis keeps the spacing honest.
     <div className="flex flex-col">
       <p className="text-xs text-muted-foreground/70 mb-1.5 shrink-0">Activity</p>
       {/* Fixed-height strip: flex-1 fill only works inside a sized flex parent,
@@ -1252,8 +1269,8 @@ function ActivityChart({ timeline }: {
       <div className="relative h-20">
         {/* faint baseline rule */}
         <div className="absolute bottom-0 left-0 right-0 h-px bg-border/40" />
-        <div className="absolute inset-0 flex items-end gap-1.5">
-          {timeline.map(d => {
+        <div className={cn('absolute inset-0 flex items-end', n > 60 ? 'gap-px' : 'gap-1.5')}>
+          {days.map(d => {
             const pct = d.seconds > 0 ? Math.max(d.seconds / max, 0.06) : 0
             const mins = Math.round(d.seconds / 60)
             const tip = `${fmtDay(d.date)}: ${mins}m${d.pages > 0 ? `, ${d.pages} pages` : ''}${d.progress_pct != null ? ` · ${d.progress_pct}% in` : ''}`
@@ -1262,7 +1279,7 @@ function ActivityChart({ timeline }: {
                 key={d.date}
                 className="flex-1 min-w-px bg-primary/60 hover:bg-primary transition-colors rounded-t-sm"
                 style={{ height: pct > 0 ? `${Math.round(pct * 100)}%` : '0%' }}
-                title={tip}
+                title={d.seconds > 0 ? tip : undefined}
               />
             )
           })}
@@ -1298,7 +1315,7 @@ function ActivityChart({ timeline }: {
 
 // Friendly label for a ReadingSession.device value.
 function sourceLabel(device: string): string {
-  if (!device || device === 'web-reader') return 'Web reader'
+  if (!device || device === 'web-reader' || device === 'web') return 'Web reader'
   if (device === 'manual') return 'Manual'
   if (device === 'koreader') return 'KOReader'
   return device
@@ -1314,7 +1331,8 @@ function SourceSplit({ sources }: { sources: { device: string; seconds: number; 
   return (
     <div className="mt-4">
       <p className="text-xs text-muted-foreground/70 mb-1.5">Where you read</p>
-      <div className="flex h-2 rounded-full overflow-hidden bg-muted">
+      {/* gap-px: adjacent primary shades are close — a hairline seam marks the split */}
+      <div className="flex gap-px h-2 rounded-full overflow-hidden bg-muted">
         {sources.map((s, i) => (
           <div
             key={s.device}
@@ -1396,6 +1414,7 @@ function ManualLogControls({ bookId, onChange, exportRows }: {
   onChange: () => void
   exportRows?: { date: string; seconds: number; pages: number; progress_pct: number | null }[]
 }) {
+  const { toast } = useToast()
   const [logging, setLogging] = useState(false)
   const [minutes, setMinutes] = useState('')
   const [pct, setPct] = useState('')
@@ -1415,6 +1434,8 @@ function ManualLogControls({ bookId, onChange, exportRows }: {
       await api.post(`/books/${bookId}/sessions?tz_offset=${new Date().getTimezoneOffset()}`, body)
       setMinutes(''); setPct(''); setLogging(false)
       onChange()
+    } catch (e) {
+      toast.error((e as Error).message ?? 'Failed to log session')
     } finally {
       setSaving(false)
     }
@@ -1501,8 +1522,19 @@ function ManualLogControls({ bookId, onChange, exportRows }: {
 // touch (native title tooltips don't). Reserved for the non-obvious charts.
 function InfoHint({ text }: { text: string }) {
   const [open, setOpen] = useState(false)
+  const rootRef = useRef<HTMLSpanElement>(null)
+  // iOS Safari doesn't focus buttons on tap, so onBlur alone never closes the
+  // popover there — close on any tap outside instead.
+  useEffect(() => {
+    if (!open) return
+    const onPointerDown = (e: PointerEvent) => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('pointerdown', onPointerDown)
+    return () => document.removeEventListener('pointerdown', onPointerDown)
+  }, [open])
   return (
-    <span className="relative inline-flex leading-none">
+    <span ref={rootRef} className="relative inline-flex leading-none">
       <button
         type="button"
         aria-label="What is this chart?"
@@ -1527,7 +1559,6 @@ function InfoHint({ text }: { text: string }) {
 }
 
 function MomentumChip({ momentum }: { momentum: NonNullable<BookReadingStats['momentum']> }) {
-  if (momentum.recent_seconds === 0 && momentum.prior_seconds === 0) return null
   const Icon = momentum.direction === 'up' ? TrendingUp : momentum.direction === 'down' ? TrendingDown : Minus
   const tone =
     momentum.direction === 'up' ? 'text-emerald-600 dark:text-emerald-400'
@@ -1585,7 +1616,8 @@ function StatsLayoutHero({ own, aggregate, bookId, onChange }: StatsLayoutProps)
           <p className="text-sm text-muted-foreground">read</p>
         </div>
         {own.momentum && <MomentumChip momentum={own.momentum} />}
-        <div className="flex items-baseline gap-x-5 gap-y-1 flex-wrap">
+        {/* 2×2 on phones — free wrapping left "pace" orphaned on its own line */}
+        <div className="grid grid-cols-2 gap-x-5 gap-y-1 sm:flex sm:items-baseline sm:flex-wrap">
           {supporting.map(s => (
             <div key={s.label} className="flex items-baseline gap-1.5">
               <span className="text-sm font-medium tabular-nums text-foreground">{s.value}</span>
@@ -1599,11 +1631,13 @@ function StatsLayoutHero({ own, aggregate, bookId, onChange }: StatsLayoutProps)
           <ActivityChart timeline={own.session_timeline} />
         </div>
       )}
-      {/* Current progress — only when there's no journey line (device books).
-          Web books already show their % in the journey line's header, so this
-          avoids two "Progress" rows saying the same thing. */}
+      {/* Current progress — only when the journey line doesn't actually render
+          (it needs 2+ progress points; a single point used to suppress BOTH,
+          leaving real progress displayed nowhere). Web books with a drawn line
+          show their % in its header, so this avoids two "Progress" rows. */}
       {own.progress != null && own.progress > 0 &&
-        !own.session_timeline.some(d => d.progress_pct != null) && (
+        !(own.session_timeline.length > 1 &&
+          own.session_timeline.filter(d => d.progress_pct != null).length > 1) && (
         <div className="mt-4">
           <div className="flex items-center justify-between mb-1.5">
             <span className="text-xs text-muted-foreground/70">Progress</span>
@@ -1626,9 +1660,11 @@ function StatsLayoutHero({ own, aggregate, bookId, onChange }: StatsLayoutProps)
           ))}
         </div>
       )}
-      {aggregate && (
+      {/* Skip when the only reader is you — the line would just repeat the hero.
+          Still shown when someone ELSE read a book you haven't touched. */}
+      {aggregate && (aggregate.distinct_readers > 1 || own.total_seconds === 0) && (
         <p className="text-xs text-muted-foreground/60 mt-3">
-          All readers: {formatDuration(aggregate.total_seconds)} · {aggregate.total_sessions} sessions · {aggregate.distinct_readers} reader{aggregate.distinct_readers !== 1 ? 's' : ''}
+          All readers: {formatDuration(aggregate.total_seconds)} · {aggregate.total_sessions} reading day{aggregate.total_sessions !== 1 ? 's' : ''} · {aggregate.distinct_readers} reader{aggregate.distinct_readers !== 1 ? 's' : ''}
         </p>
       )}
       {/* Log a session by hand · export the log */}
