@@ -2226,7 +2226,11 @@ function TomeSync:_applyServerState(alive, tombstones)
             local smtime = s.datetime_updated or s.datetime or ""
             if not L then
                 -- New highlight from another device: reconstruct so it renders.
-                local ok = pcall(function()
+                -- Rolling (crengine) docs can only draw real xPointers ("/body…");
+                -- anything else (PDF datetime fallbacks, corrupt data) would
+                -- hard-crash drawSavedHighlight → getPosFromXPointer on repaint.
+                local drawable = (not self.ui.rolling) or s.anchor:sub(1, 5) == "/body"
+                local ok = drawable and pcall(function()
                     ann:addItem({{
                         page = s.anchor, pos0 = s.anchor, pos1 = s.anchor_end or s.anchor,
                         text = s.highlighted_text, note = s.note, chapter = s.chapter,
@@ -2234,7 +2238,7 @@ function TomeSync:_applyServerState(alive, tombstones)
                         datetime = s.datetime, datetime_updated = s.datetime_updated,
                     }})
                 end)
-                changed = changed or ok
+                changed = changed or (ok == true)
             elseif smtime > L.mtime then
                 -- Newer edit from elsewhere wins (note/color/text).
                 L.item.text  = s.highlighted_text
