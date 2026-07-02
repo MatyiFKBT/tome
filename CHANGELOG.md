@@ -38,6 +38,19 @@ All notable changes to Tome are documented here. Format loosely follows
   deleted copy always loses the tie while a deliberate re-highlight still wins.
   Also, the "N from M books" counter on the Highlights page no longer under-counts
   books after deleting when more highlights are still unloaded.
+- **Late-night reading no longer splits across two days — anywhere.** Tome has
+  always counted a session started at, say, 1:30 am toward the previous evening's
+  reading day for **streaks** (a local day with a 4-hour rollover), but newer
+  features quietly bucketed by plain calendar days instead. The consequences: the
+  activity heatmap could show a gap on a day the streak counted (the long-standing
+  heatmap/streak drift), a continuous evening read crossing midnight could mark a
+  book as a **re-read** and double its **reading-log** day count, the per-book
+  **momentum** ("last 7 days vs prior") could disagree with the dashboard, and the
+  Reading DNA **rhythm** trait split night reads into two active days. Every
+  day-based view — daily chart, heatmap, re-reads, completion estimates, per-book
+  timelines, reading intensity, momentum, Reading DNA — now shares the streak's
+  single reading-day rule. The one deliberate exception is the hour-of-weekday
+  heatmap, where 1 am should still display as 1 am.
 - **Standalone books download to the correct book-type folder in KOReader.** A book
   with no series — say a RoyalRoad title — could be filed under the wrong type's
   folder (e.g. `light_novel`) when downloaded through the plugin, while books in a

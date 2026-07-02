@@ -214,7 +214,7 @@ export function BookDetailPage() {
       .then(r => { if (r.linked && r.device) setKosyncDevice(r.device) })
       .catch(() => {})  // KOSync is optional — silent fail is fine
     api.get<Annotation[]>(`/books/${id}/annotations`).then(setAnnotations).catch(() => {})
-    api.get<ReadingStatsResponse>(`/books/${id}/reading-stats`).then(setReadingStats).catch(() => {})
+    api.get<ReadingStatsResponse>(`/books/${id}/reading-stats?tz_offset=${new Date().getTimezoneOffset()}`).then(setReadingStats).catch(() => {})
   }, [id])
 
   // Animate progress bar from 0 after it loads
@@ -704,7 +704,7 @@ export function BookDetailPage() {
   // imported KOReader page-stats (a book read only on the device has no sessions
   // but does have an intensity curve).
   const refreshStats = () =>
-    api.get<ReadingStatsResponse>(`/books/${id}/reading-stats`).then(setReadingStats).catch(() => {})
+    api.get<ReadingStatsResponse>(`/books/${id}/reading-stats?tz_offset=${new Date().getTimezoneOffset()}`).then(setReadingStats).catch(() => {})
   const hasReadingData = readingStats && (readingStats.own.sessions > 0 || !!readingStats.intensity)
   const statsFull = readingStats ? (
     <div className="mt-1 mb-5">
@@ -1412,7 +1412,7 @@ function ManualLogControls({ bookId, onChange, exportRows }: {
         const p = parseFloat(pct)
         if (!Number.isNaN(p)) body.end_progress = Math.min(Math.max(p / 100, 0), 1)
       }
-      await api.post(`/books/${bookId}/sessions`, body)
+      await api.post(`/books/${bookId}/sessions?tz_offset=${new Date().getTimezoneOffset()}`, body)
       setMinutes(''); setPct(''); setLogging(false)
       onChange()
     } finally {

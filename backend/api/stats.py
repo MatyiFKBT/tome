@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Query, HTTPException
-from sqlalchemy import func, case, Integer
+from sqlalchemy import func, case
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -20,6 +20,7 @@ from backend.models.user_book_status import UserBookStatus
 from backend.models.user_series_rating import UserSeriesRating
 from backend.models.library import BookType
 from backend.services.streaks import reconciled_user_streaks
+from backend.services.reading_day import ROLLOVER_HOURS, date_modifier, effective_today, epoch_day
 from backend.services import reconciled_reading as rr
 
 router = APIRouter(tags=["stats"])
@@ -76,7 +77,10 @@ def get_stats(
     if start:
         try:
             sdate = datetime.strptime(start, "%Y-%m-%d")
-            cutoff = sdate + timedelta(minutes=tz_offset)
+            # Reading day D spans local D 04:00 → D+1 04:00 (the 4h rollover), so
+            # the UTC filter bounds shift by the rollover too — otherwise a 1am
+            # session inside the range's last day would be filtered out of it.
+            cutoff = sdate + timedelta(minutes=tz_offset, hours=ROLLOVER_HOURS)
             fill_start_local = sdate.date()
         except ValueError:
             cutoff = _date_range(days)
@@ -84,7 +88,7 @@ def get_stats(
             if end:
                 try:
                     edate = datetime.strptime(end, "%Y-%m-%d")
-                    range_end = edate + timedelta(days=1) + timedelta(minutes=tz_offset)
+                    range_end = edate + timedelta(days=1) + timedelta(minutes=tz_offset, hours=ROLLOVER_HOURS)
                     fill_end_local = edate.date()
                 except ValueError:
                     range_end = None
@@ -97,14 +101,20 @@ def get_stats(
     else:
         effective_days = 0  # all-time
 
-    # Inclusive fill window for the daily chart.
+    # Inclusive fill window for the daily chart. "Today" is the user's current
+    # reading day (4h rollover), which at 00:00–04:00 local is still yesterday.
     fill_start = fill_start_local or (cutoff or (now - timedelta(days=365))).date()
-    fill_end = fill_end_local or now.date()
+    fill_end = fill_end_local or effective_today(tz_offset)
 
     # Convert JS getTimezoneOffset (minutes, negative = east of UTC) to SQLite modifier
     # e.g. CEST = UTC+2 → JS returns -120 → we need '+2 hours'
     offset_hours = -(tz_offset // 60)
     tz_modifier = f"{offset_hours:+d} hours"
+    # Day-identity bucketing goes through the canonical reading-day modifier
+    # (local day + 4h rollover — see backend/services/reading_day.py) so daily
+    # charts, the heatmap and re-read detection agree with the streak. The plain
+    # tz_modifier stays ONLY for hour-of-day display (hour × weekday heatmap).
+    day_modifier = date_modifier(tz_offset)
 
     # Base query filtered to this user (still used by session-level tiles: pace, timeline,
     # pace-by-format — page-stats have no natural "sessions" so those stay session-sourced).
@@ -119,7 +129,7 @@ def get_stats(
     covered = rr.covered_book_ids(db, current_user.id)
 
     total_seconds, total_sessions, pages_turned = rr.totals(
-        db, current_user.id, tz_modifier, covered, cutoff, range_end
+        db, current_user.id, day_modifier, covered, cutoff, range_end
     )
 
     avg_session = int(total_seconds / total_sessions) if total_sessions > 0 else 0
@@ -142,15 +152,15 @@ def get_stats(
 
     # Daily aggregation (for selected range) — reconciled (page-stats win per book).
     daily = _fill_daily_map(
-        rr.daily_map(db, current_user.id, tz_modifier, covered, cutoff, range_end),
+        rr.daily_map(db, current_user.id, day_modifier, covered, cutoff, range_end),
         fill_start, fill_end,
     )
 
     # Heatmap daily — always last 365 days — reconciled.
     heatmap_cutoff = now - timedelta(days=365)
     heatmap_daily = _fill_daily_map(
-        rr.daily_map(db, current_user.id, tz_modifier, covered, heatmap_cutoff, None),
-        heatmap_cutoff.date(), now.date(),
+        rr.daily_map(db, current_user.id, day_modifier, covered, heatmap_cutoff, None),
+        heatmap_cutoff.date(), effective_today(tz_offset),
     )
 
     # Books finished list (for chart)
@@ -172,7 +182,7 @@ def get_stats(
 
     # Reconciled per-book reading time for the window (page-stats win per book), reused by
     # top-books, category, per-book table, and author-affinity below.
-    win_book = rr.book_seconds(db, current_user.id, tz_modifier, covered, cutoff, range_end)
+    win_book = rr.book_seconds(db, current_user.id, day_modifier, covered, cutoff, range_end)
     book_meta: dict[int, tuple] = {}
     if win_book:
         for bid, title, author, cover, label in (
@@ -303,7 +313,7 @@ def get_stats(
         duration = (range_end or now) - cutoff
         prev_start = start_date - duration
         prev_seconds = rr.totals(
-            db, current_user.id, tz_modifier, covered, prev_start, start_date
+            db, current_user.id, day_modifier, covered, prev_start, start_date
         )[0]
         pct_change: Optional[float] = 0.0
         if prev_seconds > 0:
@@ -380,7 +390,7 @@ def get_stats(
 
     # ── Monthly comparison (last 12 months) ── reconciled ──────────────────
     month_cutoff = now - timedelta(days=365)
-    _mm = rr.monthly_map(db, current_user.id, tz_modifier, covered, month_cutoff)
+    _mm = rr.monthly_map(db, current_user.id, day_modifier, covered, month_cutoff)
     month_session_map: dict[str, dict] = {
         m: {"seconds": v[0], "sessions": v[1]} for m, v in _mm.items()
     }
@@ -388,7 +398,7 @@ def get_stats(
     # Books finished per month
     month_finished_rows = (
         db.query(
-            func.strftime('%Y-%m', UserBookStatus.updated_at).label("month"),
+            func.strftime('%Y-%m', UserBookStatus.updated_at, day_modifier).label("month"),
             func.count(UserBookStatus.id).label("cnt"),
         )
         .filter(
@@ -396,7 +406,7 @@ def get_stats(
             UserBookStatus.status == "read",
             UserBookStatus.updated_at >= month_cutoff,
         )
-        .group_by(func.strftime('%Y-%m', UserBookStatus.updated_at))
+        .group_by(func.strftime('%Y-%m', UserBookStatus.updated_at, day_modifier))
         .all()
     )
     month_finished_map = {r.month: int(r.cnt) for r in month_finished_rows}
@@ -419,7 +429,7 @@ def get_stats(
 
     # ── Genre over time (last 12 months, stacked) ── reconciled ───────────
     # Reconciled per-(book, month) seconds, rolled up to book-type per month.
-    _bm = rr.book_month_seconds(db, current_user.id, tz_modifier, covered, month_cutoff)
+    _bm = rr.book_month_seconds(db, current_user.id, day_modifier, covered, month_cutoff)
     _genre_ids = {bid for (bid, _m) in _bm.keys()}
     _genre_cat: dict[int, str] = {}
     if _genre_ids:
@@ -639,7 +649,7 @@ def get_stats(
 
     # ── Ratings / taste (all-time, independent of the date window) ─────────────
     # Your taste isn't a 30-day thing, so these ignore cutoff/range entirely.
-    book_seconds_all = rr.book_seconds(db, current_user.id, tz_modifier, covered, None, None)
+    book_seconds_all = rr.book_seconds(db, current_user.id, day_modifier, covered, None, None)
     rated_rows = (
         db.query(
             Book.id, Book.title, Book.author, Book.cover_path,
@@ -720,8 +730,8 @@ def get_stats(
     }
 
     # ── Lifetime / records / TBR / language (all-time, ignore the date range) ──
-    lt_secs, lt_sessions, lt_pages = rr.totals(db, current_user.id, tz_modifier, covered, None, None)
-    all_daily = rr.daily_map(db, current_user.id, tz_modifier, covered, None, None)
+    lt_secs, lt_sessions, lt_pages = rr.totals(db, current_user.id, day_modifier, covered, None, None)
+    all_daily = rr.daily_map(db, current_user.id, day_modifier, covered, None, None)
     lifetime = {
         "seconds": lt_secs,
         "sessions": lt_sessions,
@@ -901,10 +911,10 @@ def get_stats(
     }
 
     # ── Re-reads (all-time) — books with pages revisited on a later day ─────────
-    # A page read on 2+ distinct local-days is a re-read. We rank books by how
+    # A page read on 2+ distinct reading days is a re-read. We rank books by how
     # many of their pages got revisited. Pure page-stats, no plugin work.
     from backend.models.ko_stats import PageStat as _PageStat
-    _day = func.cast(_PageStat.start_time / 86400, Integer)
+    _day = epoch_day(_PageStat.start_time, tz_offset)
     _reread_pages_sq = (
         db.query(
             _PageStat.book_id.label("book_id"),
@@ -998,6 +1008,7 @@ def get_stats(
 
 @router.get("/stats/completion-estimates")
 def get_completion_estimates(
+    tz_offset: int = Query(0, description="Client timezone offset in minutes (JS getTimezoneOffset)"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> list:
@@ -1063,7 +1074,7 @@ def get_completion_estimates(
                 func.max(PageStat.total_pages),
                 func.count(func.distinct(case((PageStat.start_time >= window_epoch, PageStat.page)))),
                 func.count(func.distinct(case((PageStat.start_time >= window_epoch,
-                                               func.cast(PageStat.start_time / 86400, Integer))))),
+                                               epoch_day(PageStat.start_time, tz_offset))))),
                 func.max(PageStat.page),
             )
             .filter(PageStat.user_id == current_user.id, PageStat.book_id == row.id)
