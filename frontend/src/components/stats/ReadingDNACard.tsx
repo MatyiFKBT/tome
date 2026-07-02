@@ -23,7 +23,8 @@ function TraitBar({ trait }: { trait: ReadingDNATrait }) {
         />
         <span
           className="absolute top-1/2 w-3 h-3 rounded-full bg-primary border-2 border-card shadow-[0_0_0_1px_var(--border)] -translate-x-1/2 -translate-y-1/2"
-          style={{ left: `${s}%` }}
+          // Clamp the marker inside the track — at 0/100 the dot half-clipped.
+          style={{ left: `${Math.min(Math.max(s, 3), 97)}%` }}
         />
       </div>
     </div>

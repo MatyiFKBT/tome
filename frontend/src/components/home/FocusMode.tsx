@@ -328,9 +328,10 @@ export function FocusMode() {
   }
 
   return (
-    <div className="flex flex-col min-h-[calc(100vh-160px)]">
-      {/* Hero composition — vertically centered so the empty space is balanced */}
-      <div className="flex-1 flex items-center w-full">
+    // Vertical centering balances the desktop hero; on phones it left a
+    // screen-third of dead space above the fan — stack from the top there.
+    <div className="flex flex-col lg:min-h-[calc(100vh-160px)]">
+      <div className="flex-1 flex items-start lg:items-center w-full">
       <div className="flex flex-col gap-8 lg:flex-row lg:items-center lg:justify-center lg:gap-14 w-full max-w-[1080px] mx-auto">
       {/* Display — animated rotary */}
       <div className="w-full lg:w-auto lg:shrink-0">
@@ -339,13 +340,10 @@ export function FocusMode() {
 
       {/* Meta — reflects the selected volume */}
       <div className="relative z-10 flex-1 min-w-0 max-w-[520px]">
+        {/* No series name here — the h1 right below IS the series (same link);
+            repeating it 40px apart just duplicated the title. */}
         <div className="flex items-center gap-2 text-[12px] font-bold tracking-[0.12em] uppercase text-muted-foreground">
           {onCurrent ? 'Continue reading' : 'Up next'}
-          {b.series && (
-            <button type="button" onClick={openHero} className="text-primary hover:underline">
-              · {b.series}
-            </button>
-          )}
         </div>
 
         <h1 className="font-display text-3xl sm:text-4xl font-bold leading-[1.05] tracking-tight mt-3 text-foreground">

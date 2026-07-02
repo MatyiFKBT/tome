@@ -42,7 +42,11 @@ All notable changes to Tome are documented here. Format loosely follows
   no longer reload the whole app, and a brand-new user no longer sees an empty
   bordered box beside the dashboard. The Reading DNA figures are also no longer
   computed for views that never show them (and on phones, only fetched when the
-  Home dashboard actually renders).
+  Home dashboard actually renders). Two touch-ups from a polish pass: the small
+  kicker line no longer repeats the series name that the big title right below
+  it already shows, and on phones the hero stacks from the top instead of
+  floating mid-screen with dead space above the covers. The Reading DNA trait
+  markers also stay inside their bars at the extremes instead of half-clipping.
 - **Sharper axis labels and richer tooltips on stats charts** *(shipped in v1.7.x
   polish, previously missing from this log)*: KPI tile labels no longer truncate
   mid-word, and the daily chart's tooltips include pages alongside minutes.
