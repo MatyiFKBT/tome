@@ -18,7 +18,31 @@ import difflib
 import re
 from dataclasses import dataclass
 
-_SOURCE_PRIORITY = {"hardcover": 0, "google_books": 1, "open_library": 2}
+_SOURCE_PRIORITY = {"hardcover": 0, "google_books": 1, "open_library": 2, "anilist": 3}
+
+_ART_WORDS = ("manga", "manhwa", "manhua", "webtoon", "comic", "graphic")
+_PROSE_WORDS = ("novel", "book")
+
+
+def classify_media_hint(hint: str | None) -> str | None:
+    """Coarse edition class from a BookType slug — custom slugs included.
+
+    Slugs are user-defined ("Webtoons", "graphic_novel", "LightNovels"), so
+    exact matching only covers the seeded four. Normalize and substring-match
+    instead. Returns "art" (sequential art), "light_novel" (a prose subclass —
+    the only one that gets the retrieval-side query bias), "prose", or None.
+    Art words win: "graphic_novel" is art despite containing "novel".
+    """
+    if not hint:
+        return None
+    h = re.sub(r"[^a-z]", "", hint.lower())
+    if any(w in h for w in _ART_WORDS):
+        return "art"
+    if h == "ln" or ("light" in h and "novel" in h):
+        return "light_novel"
+    if any(w in h for w in _PROSE_WORDS):
+        return "prose"
+    return None
 
 
 def extract_vol_number(title: str) -> int | None:
@@ -109,13 +133,14 @@ def score_candidate(candidate, ctx: ScoreContext) -> int:
 
     # Wrong edition type of the right series: a light novel must not match the
     # manga adaptation (Hardcover titles them "… (Manga), Vol. N") and vice versa.
-    if ctx.media_hint and candidate.title:
+    hint_cls = classify_media_hint(ctx.media_hint)
+    if hint_cls and candidate.title:
         ct = candidate.title.lower()
         cand_manga = "(manga)" in ct
         cand_ln = "(light novel)" in ct or "light novel" in ct
-        if ctx.media_hint in ("light_novel", "novel", "book") and cand_manga:
+        if hint_cls in ("prose", "light_novel") and cand_manga:
             score -= 5
-        elif ctx.media_hint in ("manga", "comic", "comics") and cand_ln:
+        elif hint_cls == "art" and cand_ln:
             score -= 5
 
     if candidate.source == "hardcover":

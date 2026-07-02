@@ -4,8 +4,10 @@ Sources: Hardcover (primary), Google Books, Open Library — all queried in para
 Returns a list of MetadataCandidate objects for the user to review.
 """
 import asyncio
+import copy
 import logging
 import re
+import time
 from dataclasses import dataclass, field
 
 import httpx
@@ -19,6 +21,7 @@ OPEN_LIBRARY_SEARCH = "https://openlibrary.org/search.json"
 OPEN_LIBRARY_WORK = "https://openlibrary.org{key}.json"
 OPEN_LIBRARY_COVER = "https://covers.openlibrary.org/b/id/{cover_id}-L.jpg"
 HARDCOVER_URL = "https://api.hardcover.app/v1/graphql"
+ANILIST_URL = "https://graphql.anilist.co"
 
 _MAX_RESULTS = 5
 
@@ -54,13 +57,42 @@ class RateLimited(Exception):
     """A source told us to back off (429 / exhausted quota)."""
 
 
-async def _call_with_retry(name: str, factory) -> tuple[list[MetadataCandidate], str]:
-    """Run one source with a single retry on rate-limit/timeout.
+# Short-lived per-source result cache. Re-opening the fetch dialog, retrying
+# after a rate limit, or bulk-fetching a series (whose volumes share the
+# series-level AniList lookup) should not re-hit the external APIs. Keyed by
+# (source, query); successful results only — failures always retry live.
+# Single-process in-memory, same assumption as the bake job.
+_CACHE_TTL = 900.0   # 15 minutes
+_CACHE_MAX = 512
+_source_cache: dict[tuple, tuple[float, list[MetadataCandidate]]] = {}
 
-    ``factory`` builds a fresh coroutine per attempt. Returns (candidates,
-    status); failures degrade to an empty list with an honest status instead of
-    silently pretending the book doesn't exist.
-    """
+
+def _cache_get(key: tuple) -> list[MetadataCandidate] | None:
+    hit = _source_cache.get(key)
+    if not hit or hit[0] < time.monotonic():
+        _source_cache.pop(key, None)
+        return None
+    # Deep copy both ways — merge_candidates MUTATES candidates (field fill).
+    return copy.deepcopy(hit[1])
+
+
+def _cache_put(key: tuple, candidates: list[MetadataCandidate]) -> None:
+    if len(_source_cache) >= _CACHE_MAX:
+        for k in sorted(_source_cache, key=lambda k: _source_cache[k][0])[: _CACHE_MAX // 4]:
+            _source_cache.pop(k, None)
+    _source_cache[key] = (time.monotonic() + _CACHE_TTL, copy.deepcopy(candidates))
+
+
+# In-flight request dedup: bulk-fetching a series fires the SAME series-level
+# query for every volume concurrently — the TTL cache alone can't help because
+# none of them has finished yet. Followers await the leader's future instead
+# of going out themselves.
+_inflight: dict[tuple, "asyncio.Future"] = {}
+
+
+async def _attempt_source(name: str, factory) -> tuple[list[MetadataCandidate], str]:
+    """One source, one retry on rate-limit/timeout; never raises (except
+    cancellation) — failures degrade to ([], honest_status)."""
     for attempt in (1, 2):
         try:
             res = await factory()
@@ -76,10 +108,52 @@ async def _call_with_retry(name: str, factory) -> tuple[list[MetadataCandidate],
                 continue
             logger.warning("%s timed out twice", name)
             return [], "timeout"
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             logger.warning("%s metadata fetch failed: %s", name, exc)
             return [], "error"
     return [], "error"
+
+
+async def _call_with_retry(name: str, factory, cache_key=None) -> tuple[list[MetadataCandidate], str]:
+    """Run one source with retry, short-TTL caching and in-flight dedup.
+
+    ``factory`` builds a fresh coroutine per attempt. Returns (candidates,
+    status). ``cache_key`` (usually the query string) enables the cache —
+    empty-but-successful results are cached too, so a book no source knows
+    isn't re-searched every time — and makes concurrent identical calls share
+    one outbound request.
+    """
+    key = (name, cache_key) if cache_key is not None else None
+    if key is not None:
+        cached = _cache_get(key)
+        if cached is not None:
+            return cached, ("ok" if cached else "empty")
+        pending = _inflight.get(key)
+        if pending is not None:
+            res, status = await pending
+            return copy.deepcopy(res), status
+
+    fut: asyncio.Future | None = None
+    if key is not None:
+        fut = asyncio.get_running_loop().create_future()
+        _inflight[key] = fut
+    try:
+        res, status = await _attempt_source(name, factory)
+        if key is not None and status in ("ok", "empty"):
+            _cache_put(key, res)
+        if fut is not None:
+            fut.set_result((copy.deepcopy(res), status))
+        return res, status
+    except BaseException:
+        # cancellation — release followers with an honest error, don't wedge them
+        if fut is not None and not fut.done():
+            fut.set_result(([], "error"))
+        raise
+    finally:
+        if key is not None:
+            _inflight.pop(key, None)
 
 
 async def fetch_candidates(
@@ -103,7 +177,7 @@ async def fetch_candidates(
     the best match on every consumer path, not "whatever Hardcover said first".
     ``year``/``language`` are optional ranking context.
     """
-    from backend.services.metadata_rank import ScoreContext, merge_candidates, rank_candidates
+    from backend.services.metadata_rank import ScoreContext, merge_candidates, rank_candidates, classify_media_hint
 
     # When the user has typed a manual query, ignore the stored ISBN entirely —
     # treat it like Plex "Fix Match": search only by what was typed.
@@ -111,19 +185,36 @@ async def fetch_candidates(
     query = _build_query(title, author, effective_isbn, series, series_index, query_override)
     hc_query = _build_hardcover_query(title, author, effective_isbn, series, series_index, query_override, media_hint)
 
+    hint_cls = classify_media_hint(media_hint)
+
     async with httpx.AsyncClient(timeout=10) as client:
         async def _hc_disabled() -> tuple[list[MetadataCandidate], str]:
             return [], "disabled"
 
+        async def _al_skipped() -> tuple[list[MetadataCandidate], str]:
+            return [], "skipped"
+
         hc_call = (
             _call_with_retry("hardcover", lambda: _hardcover(
-                client, title, author, effective_isbn, series, series_index, query_override, media_hint))
+                client, title, author, effective_isbn, series, series_index, query_override, media_hint),
+                cache_key=hc_query)
             if settings.hardcover_token else _hc_disabled()
         )
-        (hc, hc_status), (gb, gb_status), (ol, ol_status) = await asyncio.gather(
+        # AniList is manga-specialised (no key needed) — only worth a call for
+        # sequential-art book types. It knows series, staff, genres and covers
+        # far better than the prose-first sources, but at SERIES level.
+        al_query = query_override or series or title
+        al_call = (
+            _call_with_retry("anilist", lambda: _anilist(client, al_query), cache_key=al_query)
+            if hint_cls == "art" else _al_skipped()
+        )
+        (hc, hc_status), (gb, gb_status), (ol, ol_status), (al, al_status) = await asyncio.gather(
             hc_call,
-            _call_with_retry("google_books", lambda: _google_books(client, query, effective_isbn)),
-            _call_with_retry("open_library", lambda: _open_library(client, query, effective_isbn)),
+            _call_with_retry("google_books", lambda: _google_books(client, query, effective_isbn),
+                             cache_key=(query, effective_isbn)),
+            _call_with_retry("open_library", lambda: _open_library(client, query, effective_isbn),
+                             cache_key=(query, effective_isbn)),
+            al_call,
         )
 
         # Series-aware fallback: when the per-book title is obscure, retry empty
@@ -137,12 +228,15 @@ async def fetch_candidates(
             fallback_query = _build_series_query(series, series_index, author)
             if not gb and not ol:
                 (gb, gb_status), (ol, ol_status) = await asyncio.gather(
-                    _call_with_retry("google_books", lambda: _google_books(client, fallback_query, None)),
-                    _call_with_retry("open_library", lambda: _open_library(client, fallback_query, None)),
+                    _call_with_retry("google_books", lambda: _google_books(client, fallback_query, None),
+                                     cache_key=(fallback_query, None)),
+                    _call_with_retry("open_library", lambda: _open_library(client, fallback_query, None),
+                                     cache_key=(fallback_query, None)),
                 )
             if not hc and hc_status not in ("disabled", "rate_limited"):
                 hc, hc_status = await _call_with_retry("hardcover", lambda: _hardcover(
-                    client, title, author, None, series, series_index, fallback_query))
+                    client, title, author, None, series, series_index, fallback_query),
+                    cache_key=fallback_query)
 
         # Suspect-ISBN fallback: a stored ISBN belonging to the WRONG edition
         # (the manga's ISBN on a light novel — old auto-apply versions caused
@@ -150,12 +244,12 @@ async def fetch_candidates(
         # search never returned. If every Hardcover hit violates the media
         # hint, re-query by title/series with the edition bias and prepend.
         def _violates_hint(c: MetadataCandidate) -> bool:
-            if not media_hint or not c.title:
+            if not hint_cls or not c.title:
                 return False
             ct = c.title.lower()
-            if media_hint == "light_novel":
+            if hint_cls in ("prose", "light_novel"):
                 return "(manga)" in ct
-            if media_hint in ("manga", "comic", "comics"):
+            if hint_cls == "art":
                 return "(light novel)" in ct
             return False
 
@@ -164,21 +258,131 @@ async def fetch_candidates(
             and hc and all(_violates_hint(c) for c in hc)
         ):
             hc2, _st = await _call_with_retry("hardcover", lambda: _hardcover(
-                client, title, author, None, series, series_index, None, media_hint))
+                client, title, author, None, series, series_index, None, media_hint),
+                cache_key=_build_hardcover_query(title, author, None, series, series_index, None, media_hint))
             if hc2:
                 hc = [*hc2, *hc]
 
-    merged = merge_candidates([*hc, *gb, *ol])
+    merged = merge_candidates([*hc, *gb, *ol, *al])
+    if al:
+        _fill_from_anilist(merged, al)
     ranked = rank_candidates(merged, ScoreContext(
         title=title, author=author, isbn=effective_isbn,
         year=year, language=language, series=series, series_index=series_index,
         media_hint=media_hint,
     ))
+    sources = {"hardcover": hc_status, "google_books": gb_status, "open_library": ol_status}
+    if al_status != "skipped":
+        sources["anilist"] = al_status
     return FetchResult(
         candidates=ranked[:_MAX_RESULTS],
         query_used=hc_query,
-        sources={"hardcover": hc_status, "google_books": gb_status, "open_library": ol_status},
+        sources=sources,
     )
+
+
+# ── AniList (manga) ───────────────────────────────────────────────────────────
+
+_ANILIST_QUERY = """
+query ($search: String) {
+  Page(perPage: 3) {
+    media(search: $search, type: MANGA) {
+      id
+      title { english romaji }
+      description(asHtml: false)
+      coverImage { extraLarge large }
+      startDate { year }
+      genres
+      countryOfOrigin
+      staff(perPage: 6) { edges { role node { name { full } } } }
+    }
+  }
+}
+"""
+
+
+def _strip_anilist_markup(text: str | None) -> str | None:
+    """AniList descriptions carry light HTML (<br>, <i>) and source credits."""
+    if not text:
+        return None
+    text = re.sub(r"<br\s*/?>", "\n", text)
+    text = re.sub(r"<[^>]+>", "", text)
+    text = re.sub(r"\(Source:[^)]*\)\s*$", "", text.strip()).strip()
+    return text or None
+
+
+async def _anilist(client: httpx.AsyncClient, search: str) -> list[MetadataCandidate]:
+    """Search AniList for manga SERIES metadata (no API key required).
+
+    AniList models series, not volumes — the candidate carries series-level
+    description/staff/genres/cover. It both appears as its own candidate and
+    back-fills missing fields on volume-level hits via ``_fill_from_anilist``.
+    """
+    resp = await client.post(ANILIST_URL, json={
+        "query": _ANILIST_QUERY, "variables": {"search": search},
+    })
+    if resp.status_code == 429:
+        raise RateLimited("anilist 429")
+    resp.raise_for_status()
+    media = (resp.json().get("data") or {}).get("Page", {}).get("media") or []
+
+    out: list[MetadataCandidate] = []
+    for m in media:
+        titles = m.get("title") or {}
+        name = titles.get("english") or titles.get("romaji")
+        if not name:
+            continue
+        author = None
+        for edge in (m.get("staff") or {}).get("edges") or []:
+            role = (edge.get("role") or "").lower()
+            if "story" in role or "original creator" in role:
+                author = ((edge.get("node") or {}).get("name") or {}).get("full")
+                break
+        cover = (m.get("coverImage") or {})
+        out.append(MetadataCandidate(
+            source="anilist",
+            source_id=str(m.get("id")),
+            title=name,
+            author=author,
+            description=_strip_anilist_markup(m.get("description")),
+            cover_url=cover.get("extraLarge") or cover.get("large"),
+            year=(m.get("startDate") or {}).get("year"),
+            tags=list(m.get("genres") or []),
+            series=name,
+        ))
+    return out
+
+
+def _norm_series(name: str | None) -> str:
+    n = re.sub(r"[^\w\s]", "", (name or "").lower())
+    return re.sub(r"\s+", " ", n).strip()
+
+
+def _fill_from_anilist(candidates: list[MetadataCandidate], al: list[MetadataCandidate]) -> None:
+    """Back-fill missing description/author/tags on volume-level candidates from
+    the matching AniList series. Manga volumes are the books most often missing
+    a description in the prose-first sources; the series blurb beats nothing.
+    Covers are NOT filled — AniList's is the series (vol 1) art.
+    """
+    by_series = {_norm_series(a.title): a for a in al}
+    for c in candidates:
+        if c.source == "anilist":
+            continue
+        key = _norm_series(c.series)
+        a = by_series.get(key)
+        if a is None and c.title:
+            # no series on the candidate — try "title starts with series name"
+            nt = _norm_series(c.title)
+            a = next((v for k, v in by_series.items() if k and nt.startswith(k)), None)
+        if a is None:
+            continue
+        if not c.description and a.description:
+            c.description = a.description
+        if not c.author and a.author:
+            c.author = a.author
+        if a.tags:
+            existing = {t.lower() for t in c.tags}
+            c.tags.extend(t for t in a.tags if t.lower() not in existing)
 
 
 # ── Hardcover ─────────────────────────────────────────────────────────────────
@@ -205,7 +409,8 @@ def _build_hardcover_query(
         # "... Vol. N (light novel)" and manga ones "(Manga)". For a
         # series-variant query ("Slime 13") Typesense often surfaces ONLY the
         # wrong edition — ranking can't fix what search never returned.
-        if media_hint == "light_novel":
+        from backend.services.metadata_rank import classify_media_hint
+        if classify_media_hint(media_hint) == "light_novel":
             return f"{clean} {vol} light novel"
         return f"{clean} {vol}"
     vol_match = re.search(r'\bv(\d{2,4})\b', title, re.IGNORECASE)

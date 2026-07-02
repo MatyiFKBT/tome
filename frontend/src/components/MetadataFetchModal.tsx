@@ -93,7 +93,7 @@ export function MetadataFetchModal({ book, open, onClose, onApplied }: Props) {
 
       // Be honest about degraded sources — "no results" used to swallow 429s.
       const labels: Record<string, string> = {
-        hardcover: 'Hardcover', google_books: 'Google Books', open_library: 'Open Library',
+        hardcover: 'Hardcover', google_books: 'Google Books', open_library: 'Open Library', anilist: 'AniList',
       }
       const degraded = Object.entries(data.sources ?? {})
         .filter(([, s]) => s === 'rate_limited' || s === 'timeout' || s === 'error')
@@ -264,7 +264,7 @@ export function MetadataFetchModal({ book, open, onClose, onApplied }: Props) {
                               </span>
                             )}
                             <span className="text-[10px] px-1.5 py-0.5 rounded border border-border text-muted-foreground bg-muted">
-                              {c.source === 'hardcover' ? 'Hardcover' : c.source === 'google_books' ? 'Google' : 'OpenLib'}
+                              {c.source === 'hardcover' ? 'Hardcover' : c.source === 'google_books' ? 'Google' : c.source === 'anilist' ? 'AniList' : 'OpenLib'}
                             </span>
                           </span>
                         </div>
@@ -321,7 +321,7 @@ export function MetadataFetchModal({ book, open, onClose, onApplied }: Props) {
                   <span>
                     Incoming
                     <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded border border-border bg-background normal-case tracking-normal">
-                      {selected.source === 'hardcover' ? 'Hardcover' : selected.source === 'google_books' ? 'Google Books' : 'Open Library'}
+                      {selected.source === 'hardcover' ? 'Hardcover' : selected.source === 'google_books' ? 'Google Books' : selected.source === 'anilist' ? 'AniList' : 'Open Library'}
                     </span>
                   </span>
                 </div>
