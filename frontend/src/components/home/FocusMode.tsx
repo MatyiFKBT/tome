@@ -288,7 +288,31 @@ export function FocusMode() {
   }
 
   if (!data) {
-    return <div className="flex items-center justify-center py-40 text-muted-foreground text-sm">Loading…</div>
+    // Skeleton mirrors the hero composition (cover left, meta right) so the
+    // real content lands in place instead of replacing a centered text flash.
+    return (
+      <div className="flex flex-col lg:min-h-[calc(100vh-160px)]">
+        <div className="flex-1 flex items-start lg:items-center w-full">
+          <div className="flex flex-col gap-8 lg:flex-row lg:items-center lg:justify-center lg:gap-14 w-full max-w-[1080px] mx-auto animate-pulse">
+            <div className="w-full lg:w-auto lg:shrink-0 flex justify-center lg:justify-start">
+              <div className="rounded-xl bg-muted" style={{ width: SOLO_W, height: SOLO_H }} />
+            </div>
+            <div className="flex-1 min-w-0 max-w-[520px] w-full">
+              <div className="h-3 w-36 rounded bg-muted" />
+              <div className="mt-4 h-9 w-3/4 rounded-lg bg-muted" />
+              <div className="mt-3 h-4 w-40 rounded bg-muted" />
+              <div className="mt-6 space-y-2.5">
+                <div className="h-3.5 w-full rounded bg-muted" />
+                <div className="h-3.5 w-full rounded bg-muted" />
+                <div className="h-3.5 w-2/3 rounded bg-muted" />
+              </div>
+              <div className="mt-7 h-[7px] w-full rounded-full bg-muted" />
+              <div className="mt-7 h-12 w-44 rounded-xl bg-muted" />
+            </div>
+          </div>
+        </div>
+      </div>
+    )
   }
 
   if (!data.ready || !data.book) {

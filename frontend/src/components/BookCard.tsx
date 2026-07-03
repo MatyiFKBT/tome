@@ -34,6 +34,9 @@ interface BookCardProps {
   index?: number
   // Set as data-flip-id on the root so a parent grid can FLIP-animate reflows
   flipId?: string
+  // Home rows are usually all one format — the badge is noise there, so those
+  // callers turn it off. Library grids keep it (that's where formats differ).
+  showFormatBadge?: boolean
 }
 
 /** Compact read-only star rating for cards. Renders nothing when unrated. */
@@ -55,7 +58,7 @@ function RatingStars({ rating, size = 11 }: { rating?: number | null; size?: num
 export function BookCard({
   book, view, selected, focused, onSelect,
   onTagClick: _onTagClick, onSeriesClick, onAuthorClick,
-  readingStatus, progressPct, rating, flipId,
+  readingStatus, progressPct, rating, flipId, showFormatBadge = true,
 }: BookCardProps) {
   const navigate = useNavigate()
   const bookTypes = useBookTypes()
@@ -165,7 +168,7 @@ export function BookCard({
             <RatingStars rating={rating} size={12} />
           </div>
         ) : null}
-        {book.files.length > 0 && (
+        {showFormatBadge && book.files.length > 0 && (
           <span className="shrink-0 text-[10px] font-medium uppercase px-1.5 py-0.5 rounded bg-muted border border-border text-muted-foreground">
             {book.files[0].format}
           </span>
@@ -254,7 +257,7 @@ export function BookCard({
         )}
 
         {/* Format badge — top right */}
-        {book.files.length > 0 && (
+        {showFormatBadge && book.files.length > 0 && (
           <span className="absolute top-1.5 right-1.5 px-1.5 py-0.5 rounded text-[9px] font-semibold uppercase bg-background/70 backdrop-blur-sm text-foreground/90 border border-border/50">
             {book.files[0].format}
           </span>

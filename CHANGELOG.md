@@ -6,6 +6,47 @@ All notable changes to Tome are documented here. Format loosely follows
 
 ## [Unreleased]
 
+### Changed
+- **Dark themes got a contrast pass.** Hairline borders were sitting at an
+  alpha where most panels had none to speak of; they're a step stronger now
+  across Dark, Ember and Black, secondary text is brighter, and the rosewood
+  accent carries a little more color so buttons and progress bars don't read
+  grey-brown. Light and Amber are untouched.
+- **The Home dashboard has one primary surface now.** The quick-stats strip
+  lost its box (the figures sit on the page), the right rail became a quiet
+  tinted panel, and the content column is the single bordered, elevated card —
+  before, all three wore identical chrome and nothing led the page.
+- **Rating stars stepped back into the palette.** The gold is a notch quieter
+  in every theme — a shelf of five-star rows was the loudest color on the page.
+- **Top bar: quieter search, louder Upload.** The search box no longer wears a
+  fill and a border at rest (it sharpens on focus instead), and Upload — the
+  bar's one real action — is now a solid accent button rather than another
+  neutral chip.
+- **The sidebar recedes like the rail.** It takes the same quiet tint as the
+  Home right rail, framing the content column instead of sharing its
+  background, and empty libraries no longer show a ghost "0" count.
+- **The Home Reading Log now reads like a log, not a ticker tape.** Back-to-back
+  sessions of the same book collapse into one row ("3 sessions · 1h 08m"),
+  entries group under day headers (Today / Yesterday / date), each row shows
+  the session's clock time instead of repeating "yesterday" down the column,
+  and rows link to the book.
+- **Less badge noise on Home.** The format badge (EPUB/CBZ) no longer stamps
+  every cover in Continue Reading / Recently Finished / Recently Added — on a
+  one-format shelf it said nothing ten times over. Library grids keep it,
+  since that's where formats actually differ.
+- **Focus mode loads into a skeleton of itself** — a cover-and-text placeholder
+  in the hero's real layout — instead of flashing a bare centered "Loading…"
+  and teleporting the page in afterwards.
+- **Reading DNA bars no longer masquerade as sliders.** The round thumb-on-track
+  marker (which begged to be dragged) is gone; each trait now renders as a
+  center-origin gauge filling toward the pole you lean to.
+- **The top-bar sync chip identifies itself.** The anonymous colored dot next
+  to "12h ago" is now a sync icon, tinted by how fresh the last KOReader sync
+  is (green = minutes ago, amber = recent, grey = stale).
+- **Grouped library counts say "titles" instead of "entries"** — with Group
+  series on, "31 entries" read like a book count and never matched one; a
+  series stack plus standalones are 31 titles.
+
 ### Added
 - **The KOReader series browser got a quality pass** (plugin build 29). Big
   downloads show live progress (percent of file size) instead of sitting mute;
@@ -94,6 +135,10 @@ All notable changes to Tome are documented here. Format loosely follows
   Small "i" hints explain the progress and reading-intensity charts in plain language.
 
 ### Fixed
+- **Sidebar Libraries/Shelves no longer flicker when switching pages.** Every
+  page (Home, Stats, Highlights, Wishlist, Bindery) refetched the lists from
+  scratch on navigation, blanking the sections for a beat. The lists are now
+  cached across page mounts and refreshed silently in the background.
 - **Re-downloading a book no longer deletes its synced highlights.** A fresh
   copy of a book starts with an empty annotation sidecar; the sync used to read
   that as "the user deleted every highlight" and pushed the deletions to the

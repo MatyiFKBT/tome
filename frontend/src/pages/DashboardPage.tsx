@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, useCallback, type ReactNode } from 'react'
-import { useSearchParams, useNavigate } from 'react-router-dom'
+import { Link, useSearchParams, useNavigate } from 'react-router-dom'
 import {
   BookOpen, X, Home, ChevronRight,
   LayoutGrid, List,
@@ -10,6 +10,7 @@ import {
 import { AppHeader, HeaderSearch } from '@/components/AppHeader'
 import { useAuth, isMember, isAdmin } from '@/contexts/AuthContext'
 import { useToast } from '@/contexts/ToastContext'
+import { useSidebarLists } from '@/lib/sidebarLists'
 import { BookCard, type ViewMode } from '@/components/BookCard'
 import { SeriesStackCard } from '@/components/SeriesStackCard'
 import { SeriesRating } from '@/components/SeriesRating'
@@ -28,7 +29,7 @@ import { ReadingDNACard } from '@/components/stats/ReadingDNACard'
 import type { ReadingDNA } from '@/components/stats/shared'
 import { FocusMode } from '@/components/home/FocusMode'
 import { api } from '@/lib/api'
-import type { Book, Library, SavedFilter, ReadingStatus, Arc, SeriesMeta, SeriesStatus } from '@/lib/books'
+import type { Book, ReadingStatus, Arc, SeriesMeta, SeriesStatus } from '@/lib/books'
 import { formatBytes } from '@/lib/books'
 import { useBookTypes } from '@/lib/bookTypes'
 import { useShiftSelect } from '@/lib/useShiftSelect'
@@ -246,17 +247,6 @@ function formatReadingTime(seconds: number): string {
   if (h === 0) return `${m}m`
   if (m === 0) return `${h}h`
   return `${h}h ${m}m`
-}
-
-function relativeTime(isoString: string): string {
-  const now = Date.now()
-  const then = new Date(isoString).getTime()
-  const diff = Math.floor((now - then) / 1000)
-  if (diff < 60) return 'just now'
-  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`
-  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`
-  if (diff < 172800) return 'yesterday'
-  return `${Math.floor(diff / 86400)}d ago`
 }
 
 export function DashboardPage() {
@@ -645,10 +635,9 @@ export function DashboardPage() {
   }
 
   // ── Sidebar data ──────────────────────────────────────────────────────────
-  const [libraries, setLibraries] = useState<Library[]>([])
-  const [savedFilters, setSavedFilters] = useState<SavedFilter[]>([])
-  function loadLibraries() { api.get<Library[]>('/libraries').then(setLibraries).catch(() => {}) }
-  function loadSavedFilters() { api.get<SavedFilter[]>('/saved-filters').then(setSavedFilters).catch(() => {}) }
+  const { libraries, savedFilters, loadLibraries, loadSavedFilters } = useSidebarLists(user?.id)
+  // Cached across page mounts (see useSidebarLists) — this refetch only
+  // freshens the lists in the background, it never blanks them.
   useEffect(() => { loadLibraries(); loadSavedFilters() }, [])
 
   // ── Books + facets ────────────────────────────────────────────────────────
@@ -1107,8 +1096,11 @@ export function DashboardPage() {
               {/* ── Quick stats + mode toggle on one row ──────────────────── */}
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between sm:flex-wrap">
                 <div className="flex flex-wrap items-stretch gap-3 empty:hidden w-full sm:w-auto">
+                  {/* Chromeless — the figures sit on the page itself. Boxing them
+                      gave the strip the same weight as the content panel below,
+                      and the dashboard read as four equal crates. */}
                   {homeStats && (
-                    <div className="rounded-xl border border-border bg-card px-5 py-4 grid grid-cols-2 gap-x-4 gap-y-3 sm:gap-x-0 sm:flex w-full sm:w-fit">
+                    <div className="px-1 py-1 grid grid-cols-2 gap-x-4 gap-y-3 sm:gap-x-0 sm:flex w-full sm:w-fit">
                       {homeStatItems.map((s, i) => (
                         <div
                           key={s.label}
@@ -1133,8 +1125,10 @@ export function DashboardPage() {
 
               {/* ── Two-column body: content + rail ───────────────────────── */}
               <div className="flex flex-col gap-8 lg:grid lg:grid-cols-[minmax(0,1fr)_320px] lg:gap-7 lg:items-start">
-              {/* ── Main column (one connected panel, hairline-divided) ────── */}
-              <div className="rounded-2xl border border-border bg-card divide-y divide-border min-w-0 overflow-hidden">
+              {/* ── Main column (one connected panel, hairline-divided) ──────
+                  The ONE bordered, elevated surface on the page — the rail and
+                  stat strip deliberately carry less chrome so this reads primary. */}
+              <div className="rounded-2xl border border-border bg-card shadow-sm divide-y divide-border min-w-0 overflow-hidden">
 
               {/* ── Forgotten Books ───────────────────────────────────────── */}
               {(() => {
@@ -1216,6 +1210,7 @@ export function DashboardPage() {
                             readingStatus={status?.status}
                             progressPct={status?.progress_pct}
                             rating={status?.rating}
+                            showFormatBadge={false}
                           />
                         </div>
                       )
@@ -1289,6 +1284,7 @@ export function DashboardPage() {
                           selected={false}
                           readingStatus="read"
                           rating={readingStatuses[book.id]?.rating}
+                          showFormatBadge={false}
                         />
                       </div>
                     ))}
@@ -1311,6 +1307,7 @@ export function DashboardPage() {
                           readingStatus={readingStatuses[book.id]?.status}
                           progressPct={readingStatuses[book.id]?.progress_pct}
                           rating={readingStatuses[book.id]?.rating}
+                          showFormatBadge={false}
                         />
                       </div>
                     ))}
@@ -1323,22 +1320,70 @@ export function DashboardPage() {
                 <div className="flex flex-col gap-3 px-5 py-5">
                   <h2 className="text-base font-semibold text-foreground">Reading Log</h2>
                   <div className="flex flex-col gap-1">
-                    {activityLog.map((entry, i) => (
-                      <div key={i} className="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-muted/50 transition-colors">
-                        <div className="relative w-8 h-11 rounded overflow-hidden shrink-0 border border-border">
-                          <CoverImage
-                            src={entry.book_cover_path ? `/api/books/${entry.book_id}/cover` : null}
-                            alt={entry.book_title}
-                            iconClassName="w-3.5 h-3.5"
-                          />
+                    {(() => {
+                      // Back-to-back sessions of the same book collapse into one row
+                      // ("3 sessions · 1h 08m") under a day header — five raw
+                      // "Press Start" lines in a row said less than one merged one.
+                      const sameDay = (a: string, b: string) => new Date(a).toDateString() === new Date(b).toDateString()
+                      const dayLabel = (iso: string) => {
+                        const d = new Date(iso)
+                        const today = new Date()
+                        const yesterday = new Date(today)
+                        yesterday.setDate(today.getDate() - 1)
+                        if (d.toDateString() === today.toDateString()) return 'Today'
+                        if (d.toDateString() === yesterday.toDateString()) return 'Yesterday'
+                        return d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })
+                      }
+                      type LogRow = { entry: ActivityEntry; sessions: number; seconds: number }
+                      const days: { label: string; first: string; rows: LogRow[] }[] = []
+                      for (const entry of activityLog) {
+                        let day = days[days.length - 1]
+                        if (!day || !sameDay(day.first, entry.started_at)) {
+                          day = { label: dayLabel(entry.started_at), first: entry.started_at, rows: [] }
+                          days.push(day)
+                        }
+                        const last = day.rows[day.rows.length - 1]
+                        if (last && last.entry.book_id === entry.book_id) {
+                          last.sessions += 1
+                          last.seconds += entry.duration_seconds
+                        } else {
+                          day.rows.push({ entry, sessions: 1, seconds: entry.duration_seconds })
+                        }
+                      }
+                      return days.map(day => (
+                        <div key={day.first} className="flex flex-col gap-1">
+                          <p className="px-3 pt-2 pb-0.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                            {day.label}
+                          </p>
+                          {day.rows.map(({ entry, sessions, seconds }) => (
+                            <Link
+                              key={entry.started_at}
+                              to={`/books/${entry.book_id}`}
+                              className="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-muted/50 transition-colors"
+                            >
+                              <div className="relative w-8 h-11 rounded overflow-hidden shrink-0 border border-border">
+                                <CoverImage
+                                  src={entry.book_cover_path ? `/api/books/${entry.book_id}/cover` : null}
+                                  alt={entry.book_title}
+                                  iconClassName="w-3.5 h-3.5"
+                                />
+                              </div>
+                              <div className="min-w-0 flex-1">
+                                <p className="text-xs font-medium text-foreground truncate">{entry.book_title}</p>
+                                <p className="text-[10px] text-muted-foreground">
+                                  {sessions > 1
+                                    ? `${sessions} sessions · ${formatReadingTime(seconds)}`
+                                    : formatReadingTime(seconds)}
+                                </p>
+                              </div>
+                              <span className="text-[10px] text-muted-foreground shrink-0">
+                                {new Date(entry.started_at).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}
+                              </span>
+                            </Link>
+                          ))}
                         </div>
-                        <div className="min-w-0 flex-1">
-                          <p className="text-xs font-medium text-foreground truncate">{entry.book_title}</p>
-                          <p className="text-[10px] text-muted-foreground">{formatReadingTime(entry.duration_seconds)}</p>
-                        </div>
-                        <span className="text-[10px] text-muted-foreground shrink-0">{relativeTime(entry.started_at)}</span>
-                      </div>
-                    ))}
+                      ))
+                    })()}
                   </div>
                 </div>
               )}
@@ -1349,7 +1394,7 @@ export function DashboardPage() {
                   empty:hidden — every child is conditional (no sessions / no
                   goals / no highlights), and a brand-new user would otherwise
                   see a bare bordered box. */}
-              <aside className="rounded-2xl border border-border bg-card divide-y divide-border overflow-hidden empty:hidden">
+              <aside className="rounded-2xl bg-muted/40 divide-y divide-border/60 overflow-hidden empty:hidden">
                 {readingDna && <ReadingDNACard dna={readingDna} />}
                 <HomeGoalRings />
                 <UpcomingReleases />
@@ -1732,7 +1777,9 @@ export function DashboardPage() {
               {loading
                 ? '…'
                 : (() => {
-                    const noun = (n: number) => groupActive ? (n === 1 ? 'entry' : 'entries') : (n === 1 ? 'book' : 'books')
+                    // Grouped rows are series stacks + standalones — "titles", not the
+                    // ambiguous "entries" (which read like a book count and never matched it).
+                    const noun = (n: number) => groupActive ? (n === 1 ? 'title' : 'titles') : (n === 1 ? 'book' : 'books')
                     return totalCount !== null && totalCount > books.length
                       ? `${books.length} of ${totalCount} ${noun(totalCount)}`
                       : `${books.length} ${noun(books.length)}`
