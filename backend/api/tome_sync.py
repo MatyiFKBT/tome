@@ -42,8 +42,8 @@ logger = logging.getLogger(__name__)
 # build than 13 — otherwise a device that updated to 1.2.1's build-13 impl and
 # later points at a main/1.3.0 server (also 13) would not re-download main's
 # richer impl. Hence 14.
-TOMESYNC_PLUGIN_BUILD = 26
-TOMESYNC_PLUGIN_SEMVER = "1.7.0"
+TOMESYNC_PLUGIN_BUILD = 30
+TOMESYNC_PLUGIN_SEMVER = "1.7.4"
 TOMESYNC_PLUGIN_VERSION = str(TOMESYNC_PLUGIN_BUILD)
 
 
@@ -83,6 +83,7 @@ def _get_position(db: Session, user_id: int, book_id: int) -> Optional[TomeSyncP
 @router.get("/tome-sync/resolve")
 def resolve_book(
     filename: str,
+    ko_md5: str = "",
     db: Session = Depends(get_db),
     user: User = Depends(_get_api_key_user),
 ):
@@ -98,6 +99,18 @@ def resolve_book(
     title appeared inside vol-2's filename).
     """
     import re
+
+    # 0. Deterministic identity: the device file's KOReader partial-MD5 against
+    #    the hashes Tome recorded when it scanned or served the artifact. Exact
+    #    however the file was renamed or moved on the device; everything below
+    #    is heuristic fallback for files that never passed through Tome.
+    if ko_md5:
+        from backend.services.ko_hash import lookup_book_ids
+        hit = lookup_book_ids(db, [ko_md5]).get(ko_md5)
+        if hit is not None:
+            book = db.get(Book, hit)
+            if book and book.status == "active":
+                return {"book_id": book.id, "method": "ko_hash"}
 
     stem = filename.rsplit(".", 1)[0] if "." in filename else filename
     stem_l = stem.lower()
@@ -841,7 +854,9 @@ def download_book_via_api_key(
         raise HTTPException(status_code=404, detail="File no longer on disk")
 
     from backend.services.metadata_embed import get_baked_path
+    from backend.services.ko_hash import record_served_artifact
     serve_path = get_baked_path(book_file.book, book_file)
+    record_served_artifact(db, book_file.book_id, book_file, serve_path)
 
     filename = f"{book_file.book.title}.{book_file.format}"
     return FileResponse(
@@ -1174,6 +1189,8 @@ local lfs              = require("libs/libkoreader-lfs")
 local util             = require("util")
 local Menu             = require("ui/widget/menu")
 local InputDialog      = require("ui/widget/inputdialog")
+local ConfirmBox       = require("ui/widget/confirmbox")
+local socketutil       = require("socketutil")
 local Dispatcher       = require("dispatcher")
 local Event            = require("ui/event")
 
@@ -1207,7 +1224,6 @@ local API_KEY    = "{api_key}"
 local USERNAME   = "{username}"
 
 -- Short timeout so unreachable server doesn't freeze the UI
-http.TIMEOUT = 5
 
 -- Track consecutive failures for backoff. Time-based so it self-heals:
 -- once we hit the threshold we go quiet for BACKOFF_COOLDOWN seconds, then
@@ -1277,6 +1293,11 @@ local function apiRequest(method, path, body)
         headers["Content-Length"] = tostring(#req_body)
     end
 
+    -- Bounded per-request timeouts (block, total) via socketutil — no global
+    -- http.TIMEOUT mutation. Block 5s catches a dead route fast; the total is
+    -- deliberately generous: annotation-sync responses can be large and slow
+    -- device wifi through an HTTPS proxy must not get truncated mid-body.
+    socketutil:set_timeout(5, 45)
     local ok, code = http.request({{
         url     = url,
         method  = method,
@@ -1284,6 +1305,7 @@ local function apiRequest(method, path, body)
         source  = req_body and ltn12.source.string(req_body) or nil,
         sink    = ltn12.sink.table(resp_chunks),
     }})
+    socketutil:reset_timeout()
 
     if not ok then
         consecutive_failures = consecutive_failures + 1
@@ -1323,7 +1345,7 @@ local function pickBestFile(files)
     return files[1]
 end
 
-local function downloadFile(book_id, file_id, dest_path)
+local function downloadFile(book_id, file_id, dest_path, total_size, progress_cb)
     if not NetworkMgr:isConnected() then
         return false, "offline"
     end
@@ -1334,8 +1356,33 @@ local function downloadFile(book_id, file_id, dest_path)
         return false, "cannot open file for writing"
     end
 
-    local saved_timeout = http.TIMEOUT
-    http.TIMEOUT = 60
+    -- Generous total budget for large files; the block timeout still catches
+    -- a stalled connection quickly (no global http.TIMEOUT mutation).
+    socketutil:set_timeout(15, 900)
+
+    -- Count bytes as they stream to disk; repaint at most every 5% (known
+    -- size) or 256 KB (unknown) so e-ink isn't flooded — a 300 MB CBZ used
+    -- to sit mute for minutes with no sign of life.
+    local sink = ltn12.sink.file(fh)
+    if progress_cb then
+        local base_sink, received, last_bucket = sink, 0, 0
+        sink = function(chunk, err)
+            if chunk then
+                received = received + #chunk
+                local bucket
+                if type(total_size) == "number" and total_size > 0 then
+                    bucket = math.floor(received * 20 / total_size)
+                else
+                    bucket = math.floor(received / 262144)
+                end
+                if bucket ~= last_bucket then
+                    last_bucket = bucket
+                    pcall(progress_cb, received, total_size)
+                end
+            end
+            return base_sink(chunk, err)
+        end
+    end
 
     local ok, code = http.request({{
         url     = url,
@@ -1343,10 +1390,10 @@ local function downloadFile(book_id, file_id, dest_path)
         headers = {{
             ["Authorization"] = "Bearer " .. API_KEY,
         }},
-        sink = ltn12.sink.file(fh),
+        sink = sink,
     }})
 
-    http.TIMEOUT = saved_timeout
+    socketutil:reset_timeout()
 
     if not ok or (type(code) == "number" and code >= 300) then
         os.remove(dest_path)
@@ -1487,15 +1534,14 @@ end
 local function fetchText(path)
     if not NetworkMgr:isConnected() then return nil, "offline" end
     local chunks = {{}}
-    local saved_timeout = http.TIMEOUT
-    http.TIMEOUT = 30
+    socketutil:set_timeout(10, 60)
     local ok, code = http.request({{
         url     = SERVER_URL .. "/api" .. path,
         method  = "GET",
         headers = {{ ["Authorization"] = "Bearer " .. API_KEY }},
         sink    = ltn12.sink.table(chunks),
     }})
-    http.TIMEOUT = saved_timeout
+    socketutil:reset_timeout()
     if not ok then return nil, code end
     if type(code) == "number" and code >= 300 then return nil, code end
     return table.concat(chunks), code
@@ -1534,6 +1580,15 @@ function TomeSync:init()
     -- Web-adoption ledger: real_anchor -> provisional "web:" anchor, persisted so a
     -- failed push retries next sync (baseline alone would swallow the adoption).
     self.adopt_pending = G_reader_settings:readSetting("tomesync_adopt_pending") or {{}}
+    -- "<book_id>|<local pos0>" -> {{ anchor, anchor_end }} of the SERVER
+    -- identity for foreign highlights that had to be re-anchored on this copy
+    -- (see _applyForeign). Keys are book-scoped: xPointers are only unique
+    -- WITHIN a book, and structurally common positions (p[1]/text().0) would
+    -- otherwise collide across books and mistranslate pushes. Persisted so
+    -- repairs survive restarts.
+    self.repair_map = G_reader_settings:readSetting("tomesync_repair_map") or {{}}
+    self._heartbeat_armed = false
+    self._heartbeat_task = function() self:_heartbeatNow() end
     -- Per-book annotation sync baseline: book_id -> {{ anchor -> mtime }} as of last
     -- sync. Lets a diff tell "I deleted this" from "this is new from another device".
     self.annot_baseline = G_reader_settings:readSetting("tomesync_annot_baseline") or {{}}
@@ -1679,21 +1734,35 @@ function TomeSync:onPageUpdate(pageno)
     end
 
     self.page_count = self.page_count + 1
-    if self.page_count % HEARTBEAT_PAGES == 0 then
-        local pct = self:_getCurrentPercentage()
-        self.last_progress = pct
-        pcall(apiRequest, "PUT", "/tome-sync/position/" .. self.book_id, {{
-            progress   = self:_getCurrentProgress(),
-            percentage = pct,
-            device     = deviceName(),
-        }})
-        -- Flush any offline sessions while we know WiFi is up
-        self:_flushPendingSessions()
-        self:_flushPendingRatings()
+    -- Idle-debounced heartbeat: reaching the page threshold ARMS the push, and
+    -- every further turn re-delays it — the HTTP call runs 10s after the LAST
+    -- page turn, never on the page-turn path itself (which used to stall the
+    -- turn for up to the request timeout on a flaky network).
+    if self.page_count % HEARTBEAT_PAGES == 0 or self._heartbeat_armed then
+        self._heartbeat_armed = true
+        UIManager:unschedule(self._heartbeat_task)
+        UIManager:scheduleIn(10, self._heartbeat_task)
     end
 end
 
+function TomeSync:_heartbeatNow()
+    self._heartbeat_armed = false
+    if not self.enabled or not self.book_id then return end
+    local pct = self:_getCurrentPercentage()
+    self.last_progress = pct
+    pcall(apiRequest, "PUT", "/tome-sync/position/" .. self.book_id, {{
+        progress   = self:_getCurrentProgress(),
+        percentage = pct,
+        device     = deviceName(),
+    }})
+    -- Flush any offline sessions while we know WiFi is up
+    self:_flushPendingSessions()
+    self:_flushPendingRatings()
+end
+
 function TomeSync:onSuspend()
+    UIManager:unschedule(self._heartbeat_task)
+    self._heartbeat_armed = false
     if not self.enabled or not self.book_id then return end
 
     -- Record the reading session (lid close = end of session)
@@ -1791,61 +1860,107 @@ function TomeSync:_syncReadingStats(manual)
     end
 
     local SQ3 = require("lua-ljsqlite3/init")
-    local opened, conn = pcall(SQ3.open, path, "ro")
-    if not opened or not conn then tell("Could not open statistics database."); return end
 
-    local books, rows = {{}}, {{}}
-    local read_ok = pcall(function()
-        -- ljsqlite3 returns INTEGER columns as int64 cdata, which rapidjson can't
-        -- encode — tonumber() every numeric field. (TEXT comes back as Lua strings.)
-        local bstmt = conn:prepare("SELECT id, md5, title, authors, pages, total_read_pages FROM book")
-        for r in bstmt:rows() do
-            books[#books + 1] = {{ ko_id = tonumber(r[1]), md5 = r[2] or "", title = r[3] or "",
-                                   authors = r[4], pages = tonumber(r[5]), total_read_pages = tonumber(r[6]) }}
-        end
-        bstmt:close()
-        local pstmt = conn:prepare(
-            "SELECT id_book, page, start_time, duration, total_pages FROM page_stat_data "
-            .. "WHERE start_time >= " .. since .. " ORDER BY start_time")
-        for r in pstmt:rows() do
-            rows[#rows + 1] = {{ ko_id = tonumber(r[1]), page = tonumber(r[2]), start_time = tonumber(r[3]),
-                                duration = tonumber(r[4]), total_pages = tonumber(r[5]) }}
-        end
-        pstmt:close()
-    end)
-    pcall(function() conn:close() end)
-    if not read_ok then tell("Could not read statistics database."); return end
-    if #rows == 0 then tell("Reading history already up to date."); return end
+    -- One cheap metadata pass: the book table is one row per book, and COUNT(*)
+    -- sizes the progress message. Page rows are windowed below — memory stays
+    -- flat no matter how many years of history the device holds (a real Kindle
+    -- DB measures tens of thousands of page_stat_data rows; the old slurp-all
+    -- approach materialised every one of them as a Lua table at once).
+    local books_by_id, total = {{}}, 0
+    do
+        local opened, conn = pcall(SQ3.open, path, "ro")
+        if not opened or not conn then tell("Could not open statistics database."); return end
+        local read_ok = pcall(function()
+            -- ljsqlite3 returns INTEGER columns as int64 cdata, which rapidjson can't
+            -- encode — tonumber() every numeric field. (TEXT comes back as Lua strings.)
+            local bstmt = conn:prepare("SELECT id, md5, title, authors, pages, total_read_pages FROM book")
+            for r in bstmt:rows() do
+                books_by_id[tonumber(r[1])] = {{ ko_id = tonumber(r[1]), md5 = r[2] or "", title = r[3] or "",
+                                                 authors = r[4], pages = tonumber(r[5]), total_read_pages = tonumber(r[6]) }}
+            end
+            bstmt:close()
+            local cstmt = conn:prepare("SELECT COUNT(*) FROM page_stat_data WHERE start_time >= " .. since)
+            for r in cstmt:rows() do total = tonumber(r[1]) or 0 end
+            cstmt:close()
+        end)
+        pcall(function() conn:close() end)
+        if not read_ok then tell("Could not read statistics database."); return end
+    end
+    if total == 0 then tell("Reading history already up to date."); return end
 
     self._stats_syncing = true
     local dev   = deviceName()
-    local CHUNK = 2000
-    local total = #rows
+    local CHUNK = 500
     local sent  = 0
+    -- Keyset cursor, strictly after (start_time, rowid). Starting at
+    -- (watermark, -1) keeps the old ">= watermark" boundary refetch: rows that
+    -- share the watermark second are re-sent and no-op server-side (the import
+    -- is INSERT OR IGNORE on the identity key). An interrupted run resumes
+    -- from the server watermark on the next launch, exactly as before.
+    local cur_start, cur_rowid = since, -1
+
+    local function readWindow()
+        local opened, conn = pcall(SQ3.open, path, "ro")
+        if not opened or not conn then return nil end
+        local rows = {{}}
+        local ok = pcall(function()
+            local stmt = conn:prepare(string.format(
+                "SELECT rowid, id_book, page, start_time, duration, total_pages FROM page_stat_data "
+                .. "WHERE start_time > %d OR (start_time = %d AND rowid > %d) "
+                .. "ORDER BY start_time, rowid LIMIT %d", cur_start, cur_start, cur_rowid, CHUNK))
+            for r in stmt:rows() do
+                rows[#rows + 1] = {{ rowid = tonumber(r[1]), ko_id = tonumber(r[2]), page = tonumber(r[3]),
+                                     start_time = tonumber(r[4]), duration = tonumber(r[5]), total_pages = tonumber(r[6]) }}
+            end
+            stmt:close()
+        end)
+        pcall(function() conn:close() end)
+        if not ok then return nil end
+        return rows
+    end
+
     local function finish(msg, force)
         self._stats_syncing = false
         if manual or force then UIManager:show(InfoMessage:new{{ text = msg, timeout = 3 }}) end
     end
     local sendNext
     sendNext = function()
-        if sent >= total then
-            finish(string.format("Reading history synced (%d records).", total))
-            return
-        end
         if not NetworkMgr:isConnected() then
             finish("Reading-history sync paused (offline). Resumes later.")
             return
         end
-        local chunk = {{}}
-        local stop = math.min(sent + CHUNK, total)
-        for i = sent + 1, stop do chunk[#chunk + 1] = rows[i] end
+        local rows = readWindow()
+        if rows == nil then
+            finish("Could not read statistics database.")
+            return
+        end
+        if #rows == 0 then
+            finish(string.format("Reading history synced (%d records).", sent))
+            return
+        end
+        -- Send only the books this window references, not the whole table
+        -- with every chunk. Rows whose book row has vanished are still sent
+        -- (server skips them, same as before) but never block the cursor.
+        local chunk_books, seen = {{}}, {{}}
+        local payload = {{}}
+        for i = 1, #rows do
+            local r = rows[i]
+            if books_by_id[r.ko_id] and not seen[r.ko_id] then
+                seen[r.ko_id] = true
+                chunk_books[#chunk_books + 1] = books_by_id[r.ko_id]
+            end
+            payload[#payload + 1] = {{ ko_id = r.ko_id, page = r.page, start_time = r.start_time,
+                                       duration = r.duration, total_pages = r.total_pages }}
+        end
         local resp = apiRequest("POST", "/tome-sync/stats/import",
-            {{ device = dev, books = books, page_stats = chunk }})
+            {{ device = dev, books = chunk_books, page_stats = payload }})
         if type(resp) ~= "table" then
             finish("Reading-history sync interrupted. Resumes next launch.")
             return
         end
-        sent = stop
+        local last = rows[#rows]
+        cur_start, cur_rowid = last.start_time, last.rowid
+        sent = sent + #rows
         -- Yield to the UI between chunks (the device stays responsive).
         UIManager:scheduleIn(0.05, sendNext)
     end
@@ -1878,6 +1993,8 @@ function TomeSync:_flushPendingSessions()
 end
 
 function TomeSync:onCloseDocument()
+    UIManager:unschedule(self._heartbeat_task)
+    self._heartbeat_armed = false
     if not self.enabled or not self.book_id then return end
 
     local pct      = self:_getCurrentPercentage()
@@ -1923,9 +2040,20 @@ function TomeSync:_tryResolve()
     local doc = self.ui and self.ui.document
     if not doc then return end
     local filename = doc.file:match("([^/]+)$") or doc.file
+    -- KOReader's own file identity, computed FRESH from the file (~12KB of
+    -- reads). The sidecar's partial_md5_checksum is only a fallback: metadata
+    -- archive restores can inherit it from ANOTHER copy of the book, so it is
+    -- not a reliable hash of these bytes (observed in emulator testing). The
+    -- server matches against the hashes recorded when it scanned or served
+    -- the artifact; the filename heuristics remain as final fallback.
+    local mok, md5 = pcall(function() return require("util").partialMD5(doc.file) end)
+    if not mok or type(md5) ~= "string" then
+        md5 = self.ui.doc_settings and self.ui.doc_settings:readSetting("partial_md5_checksum")
+    end
     logger.info("TomeSync: resolving filename:", filename)
     local rok, result, rcode = pcall(apiRequest, "GET",
-        "/tome-sync/resolve?filename=" .. urlEncode(filename))
+        "/tome-sync/resolve?filename=" .. urlEncode(filename)
+        .. (md5 and ("&ko_md5=" .. urlEncode(md5)) or ""))
     if rok and result and type(rcode) == "number" and rcode == 200 and result.book_id then
         self.book_id = result.book_id
         self.book_map[doc.file] = self.book_id
@@ -2203,7 +2331,15 @@ function TomeSync:_localAnnotationMap()
     local map = {{}}
     for _, a in ipairs(list) do
         local anchor = annotAnchor(a)
-        if anchor then map[anchor] = {{ item = a, mtime = annotMtime(a) }} end
+        if anchor then
+            -- Repaired foreign highlights render at a local position but keep
+            -- their SERVER identity: index them under the server anchor so
+            -- edits/deletes/tombstones from other devices reach them, and our
+            -- own pushes never mint a duplicate identity for the same words.
+            local alias = self.repair_map and self.book_id
+                and self.repair_map[tostring(self.book_id) .. "|" .. anchor]
+            map[(alias and alias.anchor) or anchor] = {{ item = a, mtime = annotMtime(a) }}
+        end
     end
     return map
 end
@@ -2225,23 +2361,10 @@ function TomeSync:_applyServerState(alive, tombstones)
             local L = localmap[s.anchor]
             local smtime = s.datetime_updated or s.datetime or ""
             if not L then
-                -- New highlight from another device: reconstruct so it renders.
-                -- Rolling (crengine) docs can only draw real xPointers ("/body…");
-                -- anything else (PDF datetime fallbacks, corrupt data) would
-                -- hard-crash drawSavedHighlight → getPosFromXPointer on repaint.
-                -- Paging (PDF/CBZ) docs can't reconstruct foreign annotations at
-                -- all — they need a numeric page and rect tables, which anchors
-                -- don't carry — so there they stay server-side only.
-                local drawable = self.ui.rolling and s.anchor:sub(1, 5) == "/body"
-                local ok = drawable and pcall(function()
-                    ann:addItem({{
-                        page = s.anchor, pos0 = s.anchor, pos1 = s.anchor_end or s.anchor,
-                        text = s.highlighted_text, note = s.note, chapter = s.chapter,
-                        color = s.color, drawer = "lighten",
-                        datetime = s.datetime, datetime_updated = s.datetime_updated,
-                    }})
-                end)
-                changed = changed or (ok == true)
+                -- New highlight from another device: verify it reproduces its
+                -- text on THIS copy before drawing; repair or skip otherwise
+                -- (paging docs reconstruct nothing — see _applyForeign).
+                changed = self:_applyForeign(ann, s) or changed
             elseif smtime > L.mtime then
                 -- Newer edit from elsewhere wins (note/color/text).
                 L.item.text  = s.highlighted_text
@@ -2276,6 +2399,89 @@ function TomeSync:_applyServerState(alive, tombstones)
     end
 end
 
+function TomeSync:_locateText(text, chapter)
+    -- Find `text` in the open (rolling) document; when several places carry
+    -- the same words prefer the hit inside `chapter`. Returns start/end
+    -- xPointers or nil. Shared by web adoption and foreign-highlight repair.
+    local ok, results = pcall(function()
+        -- (pattern, case_insensitive, nb_context_words, max_hits, regex)
+        return self.ui.document:findAllText(text, false, 2, 5, false)
+    end)
+    if not ok or type(results) ~= "table" then return nil end
+    local hit = results[1]
+    if #results > 1 and chapter then
+        for _, r in ipairs(results) do
+            local okc, title = pcall(function()
+                local page = self.ui.document:getPageFromXPointer(r.start)
+                return self.ui.toc:getTocTitleByPage(page)
+            end)
+            if okc and title == chapter then hit = r; break end
+        end
+    end
+    if hit and type(hit.start) == "string" and type(hit["end"]) == "string" then
+        return hit.start, hit["end"]
+    end
+    return nil
+end
+
+function TomeSync:_applyForeign(ann, s)
+    -- A highlight made on another device. NEVER paint it on the wrong words:
+    -- verify that the anchor reproduces the highlighted text on THIS copy of
+    -- the book, repair by text search when it doesn't (a different bake of the
+    -- same book shifts xPointers), and skip entirely when the text can't be
+    -- located. Repairs keep the SERVER identity (repair_map) so the origin
+    -- device's anchor is never rewritten — no cross-device anchor ping-pong.
+    local function norm(t)
+        if type(t) ~= "string" then return nil end
+        t = t:gsub("\194\173", "")       -- soft hyphens (U+00AD)
+        t = t:gsub("%s+", " ")
+        return t:match("^%s*(.-)%s*$")
+    end
+    local function add(p0, p1)
+        return pcall(function()
+            ann:addItem({{
+                page = p0, pos0 = p0, pos1 = p1,
+                text = s.highlighted_text, note = s.note, chapter = s.chapter,
+                color = s.color, drawer = "lighten",
+                datetime = s.datetime, datetime_updated = s.datetime_updated,
+            }})
+        end) == true
+    end
+
+    if not self.ui.rolling then
+        -- Paging (PDF/CBZ) docs can't reconstruct foreign annotations at all:
+        -- they need a numeric page and rect tables, which sync anchors don't
+        -- carry — planting strings corrupts the annotation list and crashes
+        -- the reader on repaint. They stay server-side only (skipped items
+        -- never enter the local map or baseline, so nothing is resurrected
+        -- or spuriously deleted).
+        return false
+    end
+
+    local want = norm(s.highlighted_text)
+    if s.anchor:sub(1, 5) == "/body" then
+        local okx, got = pcall(function()
+            return self.ui.document:getTextFromXPointers(s.anchor, s.anchor_end or s.anchor)
+        end)
+        if okx and (not want or norm(got) == want) then
+            -- verified (or nothing to verify against): draw at the real anchor
+            return add(s.anchor, s.anchor_end or s.anchor)
+        end
+    end
+
+    if not want or want == "" then return false end
+    local p0, p1 = self:_locateText(s.highlighted_text, s.chapter)
+    if not p0 then return false end   -- unlocatable here: skip, never wrong words
+    for _, a in ipairs(ann.annotations or {{}}) do
+        if a.pos0 == p0 then return false end   -- already rendered by an earlier repair
+    end
+    if not add(p0, p1) then return false end
+    self.repair_map[tostring(self.book_id) .. "|" .. p0] = {{ anchor = s.anchor, anchor_end = s.anchor_end }}
+    G_reader_settings:saveSetting("tomesync_repair_map", self.repair_map)
+    logger.info("TomeSync: repaired foreign highlight to", p0)
+    return true
+end
+
 function TomeSync:_adoptWebAnnotations(pending)
     -- Highlights created in Tome's web reader arrive with a provisional "web:"
     -- anchor and no position. Locate each one's text with crengine and create a
@@ -2295,25 +2501,11 @@ function TomeSync:_adoptWebAnnotations(pending)
     for _, s in ipairs(pending) do
         local text = s.highlighted_text
         if type(text) == "string" and text ~= "" and not seen_text[text] then
-            local ok, results = pcall(function()
-                -- (pattern, case_insensitive, nb_context_words, max_hits, regex)
-                return self.ui.document:findAllText(text, false, 2, 5, false)
-            end)
-            local hit = (ok and type(results) == "table") and results[1] or nil
-            if ok and type(results) == "table" and #results > 1 and s.chapter then
-                -- Same text in several places: prefer the chapter the web named.
-                for _, r in ipairs(results) do
-                    local okc, title = pcall(function()
-                        local page = self.ui.document:getPageFromXPointer(r.start)
-                        return self.ui.toc:getTocTitleByPage(page)
-                    end)
-                    if okc and title == s.chapter then hit = r; break end
-                end
-            end
-            if hit and type(hit.start) == "string" and type(hit["end"]) == "string" then
+            local hit_start, hit_end = self:_locateText(text, s.chapter)
+            if hit_start then
                 local okAdd = pcall(function()
                     ann:addItem({{
-                        page = hit.start, pos0 = hit.start, pos1 = hit["end"],
+                        page = hit_start, pos0 = hit_start, pos1 = hit_end,
                         text = text, note = s.note, chapter = s.chapter,
                         color = s.color, drawer = "lighten",
                         datetime = s.datetime, datetime_updated = s.datetime_updated,
@@ -2321,7 +2513,7 @@ function TomeSync:_adoptWebAnnotations(pending)
                 end)
                 if okAdd then
                     seen_text[text] = true
-                    self.adopt_pending[hit.start] = s.anchor
+                    self.adopt_pending[hit_start] = s.anchor
                     adopted = adopted + 1
                 end
             end
@@ -2343,11 +2535,36 @@ function TomeSync:_syncAnnotations()
     local bk = tostring(self.book_id)
     local baseline = self.annot_baseline[bk] or {{}}
 
+    -- Bind the baseline to THIS sidecar instance. A fresh sidecar (new
+    -- download of the book, or a wiped sidecar) starts without our marker:
+    -- its empty annotation list reflects a NEW FILE, not the user deleting
+    -- every highlight — diffing the old baseline against it would push
+    -- deletes and tombstone the book's highlights server-side (observed live:
+    -- re-downloading a book wiped its synced highlight). Reset the baseline
+    -- instead; the pull below re-applies the server state. True deletions
+    -- still propagate: once the marker is set, baseline diffs work as before.
+    if self.ui.doc_settings then
+        if not self.ui.doc_settings:readSetting("tomesync_annot_bound") and next(baseline) ~= nil then
+            baseline = {{}}
+            self.annot_baseline[bk] = {{}}
+        end
+        self.ui.doc_settings:saveSetting("tomesync_annot_bound", true)
+    end
+
     local upserts, deletes = {{}}, {{}}
     for anchor, L in pairs(localmap) do
         if baseline[anchor] == nil or baseline[anchor] ~= L.mtime then
             local it = self:_annotItem(L.item)
-            if it then table.insert(upserts, it) end
+            if it then
+                if it.anchor ~= anchor then
+                    -- repaired item: push under its server identity, with the
+                    -- ORIGIN device's positions (ours are local rendering only)
+                    local alias = self.repair_map[bk .. "|" .. it.anchor]
+                    it.anchor = anchor
+                    it.anchor_end = (alias and alias.anchor_end) or it.anchor_end
+                end
+                table.insert(upserts, it)
+            end
         end
     end
     local now = os.date("%Y-%m-%d %H:%M:%S")   -- local wall-clock, matches KOReader's
@@ -2392,6 +2609,21 @@ function TomeSync:_syncAnnotations()
     for anchor, L in pairs(after) do newbase[anchor] = L.mtime end
     self.annot_baseline[bk] = newbase
     G_reader_settings:saveSetting("tomesync_annot_baseline", self.annot_baseline)
+
+    -- Drop aliases whose local rendering is gone (a local delete already went
+    -- out under the server identity above) so the map can't grow stale.
+    local raw = {{}}
+    for _, a in ipairs((self.ui.annotation and self.ui.annotation.annotations) or {{}}) do
+        if type(a.pos0) == "string" then raw[a.pos0] = true end
+    end
+    local pruned = false
+    local prefix = bk .. "|"
+    for key in pairs(self.repair_map) do
+        if key:sub(1, #prefix) == prefix and not raw[key:sub(#prefix + 1)] then
+            self.repair_map[key] = nil; pruned = true
+        end
+    end
+    if pruned then G_reader_settings:saveSetting("tomesync_repair_map", self.repair_map) end
     return resp
 end
 
@@ -2553,22 +2785,36 @@ function TomeSync:_downloadSeriesBooks(series_name, books, min_index, book_type,
         UIManager:forceRePaint()
     end
 
+    local function fmtMB(n)
+        return string.format("%.1f MB", n / 1048576)
+    end
     local downloaded, failed = 0, 0
+    local failed_books = {{}}
     for i, item in ipairs(queue) do
-        showProgress(string.format(
-            "%s\\n\\nDownloading %d of %d\\n%s",
-            batch_label, i, #queue, item.book.title
-        ))
+        local head = string.format("%s\\n\\nDownloading %d of %d\\n%s",
+                                   batch_label, i, #queue, item.book.title)
+        showProgress(head)
         if not item.file then
             failed = failed + 1
+            table.insert(failed_books, item.book)
         else
-            local ok, err = downloadFile(item.book.id, item.file.id, item.dest)
+            local total = type(item.file.file_size) == "number" and item.file.file_size or nil
+            local ok, err = downloadFile(item.book.id, item.file.id, item.dest, total,
+                function(received, size)
+                    if size then
+                        showProgress(string.format("%s\\n%d%% of %s", head,
+                            math.floor(received * 100 / size), fmtMB(size)))
+                    else
+                        showProgress(string.format("%s\\n%s", head, fmtMB(received)))
+                    end
+                end)
             if ok then
                 downloaded = downloaded + 1
                 self.book_map[item.dest] = item.book.id
             else
                 logger.warn("TomeSync: download failed for", item.book.title, err)
                 failed = failed + 1
+                table.insert(failed_books, item.book)
             end
         end
     end
@@ -2578,13 +2824,41 @@ function TomeSync:_downloadSeriesBooks(series_name, books, min_index, book_type,
     G_reader_settings:saveSetting("tomesync_book_map", self.book_map)
 
     if not quiet then
-        UIManager:show(InfoMessage:new{{
-            text = string.format(
-                "%s\\n\\nDownloaded: %d\\nSkipped: %d\\nFailed: %d\\n\\nSaved to: %s",
-                batch_label, downloaded, skipped, failed, save_location or base_dir
-            ),
-            timeout = 8,
-        }})
+        if failed > 0 and #failed_books > 0 then
+            -- Offer a retry instead of a one-shot failure count: transient
+            -- WiFi drops are the usual culprit and a second pass fixes them.
+            UIManager:show(ConfirmBox:new{{
+                text = string.format(
+                    "%s\\n\\nDownloaded: %d\\nSkipped: %d\\nFailed: %d",
+                    batch_label, downloaded, skipped, failed
+                ),
+                ok_text = "Retry failed",
+                cancel_text = "Close",
+                ok_callback = function()
+                    self:_downloadSeriesBooks(series_name, failed_books, min_index, book_type, quiet)
+                end,
+            }})
+        else
+            UIManager:show(InfoMessage:new{{
+                text = string.format(
+                    "%s\\n\\nDownloaded: %d\\nSkipped: %d\\nFailed: %d\\n\\nSaved to: %s",
+                    batch_label, downloaded, skipped, failed, save_location or base_dir
+                ),
+                timeout = 8,
+            }})
+            if downloaded == 1 and #queue == 1 and queue[1].dest then
+                -- Single fresh download: offer to jump straight into it.
+                local dest = queue[1].dest
+                UIManager:show(ConfirmBox:new{{
+                    text = string.format('Open "%s" now?', queue[1].book.title or "book"),
+                    ok_text = "Open",
+                    cancel_text = "Later",
+                    ok_callback = function()
+                        require("apps/reader/readerui"):showReader(dest)
+                    end,
+                }})
+            end
+        end
     end
     return {{ downloaded = downloaded, skipped = skipped, failed = failed }}
 end
@@ -2602,6 +2876,11 @@ function TomeSync:_seriesBooksMenu(data)
             self:_downloadSeriesBooks(data.series_name, data.books, nil, data.book_type)
         end,
     }})
+    -- book_id → on-device path (same signal the download queue uses to skip)
+    local id_to_path = {{}}
+    for path, bid in pairs(self.book_map) do
+        if lfs.attributes(path) then id_to_path[bid] = path end
+    end
     for _, book in ipairs(data.books) do
         local label
         if type(book.series_index) == "number" then
@@ -2610,6 +2889,9 @@ function TomeSync:_seriesBooksMenu(data)
             label = "Vol. " .. tostring(vol) .. " — " .. book.title
         else
             label = book.title
+        end
+        if id_to_path[book.id] then
+            label = label .. "  · on device"
         end
         table.insert(items, {{
             text     = label,
@@ -2643,10 +2925,12 @@ function TomeSync:_browseSeriesMenuImpl()
     end
 
     local ok, series_list, code = pcall(apiRequest, "GET", "/tome-sync/series")
-    if not ok or not series_list or (type(code) == "number" and code >= 300) then
-        UIManager:show(InfoMessage:new{{
+    if not ok or type(series_list) ~= "table" or (type(code) == "number" and code >= 300) then
+        UIManager:show(ConfirmBox:new{{
             text = "Failed to load series list.",
-            timeout = 4,
+            ok_text = "Retry",
+            cancel_text = "Close",
+            ok_callback = function() self:_browseSeriesMenuImpl() end,
         }})
         return
     end
@@ -2664,18 +2948,7 @@ function TomeSync:_browseSeriesMenuImpl()
         table.insert(items, {{
             text = text,
             callback = function()
-                -- Fetch the books in this series, then drill into a per-book list
-                -- so a single title can be downloaded instead of the whole series.
-                local ok2, data, code2 = pcall(apiRequest, "GET",
-                    "/tome-sync/series/" .. s.first_book_id)
-                if ok2 and data and data.books then
-                    self:_seriesBooksMenu(data)
-                else
-                    UIManager:show(InfoMessage:new{{
-                        text = "Failed to load series books.",
-                        timeout = 4,
-                    }})
-                end
+                self:_openSeriesBooks(s.first_book_id)
             end,
         }})
     end
@@ -2688,6 +2961,23 @@ function TomeSync:_browseSeriesMenuImpl()
         show_parent = self.ui or UIManager,
     }}
     UIManager:show(menu)
+end
+
+function TomeSync:_openSeriesBooks(first_book_id)
+    -- Fetch the books in this series, then drill into a per-book list so a
+    -- single title can be downloaded instead of the whole series.
+    local ok2, data, code2 = pcall(apiRequest, "GET", "/tome-sync/series/" .. first_book_id)
+    if ok2 and type(data) == "table" and data.books then
+        self:_seriesBooksMenu(data)
+    else
+        UIManager:show(ConfirmBox:new{{
+            text = "Failed to load series books.",
+            ok_text = "Retry",
+            cancel_text = "Close",
+            ok_callback = function() self:_openSeriesBooks(first_book_id) end,
+        }})
+    end
+    local _ = code2
 end
 
 function TomeSync:_downloadCurrentBookSeries(rest_only)

@@ -159,5 +159,32 @@ def test_build_bumped_for_rebake():
     # web reader arrive under a provisional "web:" anchor; the plugin locates the
     # text natively, creates a first-class KOReader highlight, and the sync push
     # (adopted_from) retires the provisional server-side.
-    assert TOMESYNC_PLUGIN_BUILD >= 25
-    assert TOMESYNC_PLUGIN_SEMVER == "1.7.0"
+    # 1.7.1 / build 26 makes the reading-history backfill memory-bounded:
+    # keyset-windowed reads over (start_time, rowid) instead of loading every
+    # page-stat row since the watermark at once, and each upload chunk carries
+    # only the books it references. Verified against a 34k-row device DB.
+    # 1.7.2 / build 27 adds deterministic book identity: the plugin sends the
+    # file's KOReader partial-MD5 with resolve calls; the server matches it
+    # against ko_hashes (recorded at scan/serve time) before any filename
+    # heuristics — renamed/moved device files resolve exactly.
+    # 1.7.3 / build 28 verifies foreign highlights before painting them: the
+    # anchor must reproduce its highlighted text on this copy; mismatches are
+    # repaired by text search (rendered locally, server identity kept via
+    # repair_map — no cross-device anchor ping-pong); unlocatable text is
+    # skipped rather than painted on the wrong words.
+    # 1.7.4 / build 29 is the UX batch: bounded socketutil timeouts on every
+    # request (no more global http.TIMEOUT mutation; a dead server stalls the
+    # UI seconds, not a minute), failed fetches/downloads offer Retry,
+    # downloads show live byte/percent progress, a single fresh download
+    # offers "Open now?", volume rows are marked "· on device", and the
+    # position heartbeat is idle-debounced off the page-turn path. (A Trapper
+    # subprocess variant for fetches was built and dropped: forked sockets
+    # from plugin context proved unverifiable on the emulator.)
+    # Build numbering note: TWO build 26s shipped from parallel branches on
+    # 2026-07-03 (main: the paging-annotation guard; the foundations stack:
+    # the memory-bounded backfill). The merge resolves to build 30 so every
+    # device re-fetches regardless of which 26 it took; 27-29 are the
+    # foundations-stack builds (identity+clustering, verify/repair, UX batch),
+    # and the paging guard's semantics are folded into _applyForeign.
+    assert TOMESYNC_PLUGIN_BUILD >= 30
+    assert TOMESYNC_PLUGIN_SEMVER == "1.7.4"

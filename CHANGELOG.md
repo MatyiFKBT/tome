@@ -7,6 +7,28 @@ All notable changes to Tome are documented here. Format loosely follows
 ## [Unreleased]
 
 ### Added
+- **The KOReader series browser got a quality pass** (plugin build 29). Big
+  downloads show live progress (percent of file size) instead of sitting mute;
+  a failed list-load or download offers **Retry** instead of a dead-end popup;
+  a single fresh download asks **"Open now?"**; volumes you already have are
+  marked **"on device"** in the list; and every request now has tight network
+  timeouts, so a dead server stalls the reader for seconds, not a minute. The
+  position heartbeat also moved off the page-turn path — it fires when the
+  reader is idle, never while you're turning.
+- **KOReader files are now recognised by content, not just by name.** Tome
+  records the KOReader-style hash of every file it scans and every copy it
+  serves, and the plugin (build 27) sends the open file's hash when it asks
+  "which book is this?". A book you renamed or moved on the device — or
+  sideloaded from the same source — now resolves exactly, with the careful
+  filename matching kept as fallback. The reading-history import uses the same
+  hashes first, so device history matches your library deterministically
+  before any title guessing.
+- **Session counts from imported device history are real sessions now.** The
+  stats reconciliation used to approximate "one session per book per day";
+  it now splits device reading at 30-minute gaps, the same way sessions are
+  actually experienced. On a real multi-year device history that corrected a
+  one-third undercount (320 → 470 sessions); reading time and page counts are
+  unchanged, and a read across midnight counts once, on the day it began.
 - **File books into libraries straight from the Bindery.** The review form
   (and the batch "apply to all" bar) now has a Libraries picker like the one
   on the book page, so an accepted book lands in the right libraries in one
@@ -72,6 +94,33 @@ All notable changes to Tome are documented here. Format loosely follows
   Small "i" hints explain the progress and reading-intensity charts in plain language.
 
 ### Fixed
+- **Re-downloading a book no longer deletes its synced highlights.** A fresh
+  copy of a book starts with an empty annotation sidecar; the sync used to read
+  that as "the user deleted every highlight" and pushed the deletions to the
+  server (verified live — one re-download tombstoned the book's highlights
+  everywhere). The sync now recognises a sidecar it hasn't seen before and
+  re-applies the server's highlights instead. Deleting highlights on the device
+  still propagates exactly as before.
+- **Highlights from another device can no longer land on the wrong words.**
+  Before painting a highlight that was made elsewhere, the plugin (build 28)
+  now verifies the stored position actually reproduces the highlighted text on
+  this copy of the book. When it doesn't (a re-downloaded copy can shift
+  positions), the passage is found by its text and painted there — while the
+  original device's position stays untouched on the server, so the two devices
+  can't fight over it. Text that can't be located is skipped rather than
+  guessed. Notes edited on a repaired highlight still sync everywhere.
+- **Book matching no longer trusts a stale device checksum.** KOReader's
+  sidecar hash can be inherited from a different copy of a book (metadata
+  restores); the plugin now hashes the actual file when identifying it,
+  which the emulator tests caught producing wrong lookups.
+- **The KOReader reading-history import no longer risks out-of-memory on big
+  histories.** The plugin used to load every page-stat row since the last sync
+  into memory at once — tens of thousands of rows on a device with years of
+  reading — and resend the full book list with every upload chunk. It now reads
+  and uploads in small windows (verified against a real 34,000-row device
+  database), sends each chunk only the books it references, and an interrupted
+  run still resumes exactly where it left off. Plugin build 26; update from
+  TomeSync's "Check for updates" as usual.
 - **Annotations from another device can no longer break a book opened as a PDF
   or comic.** The cross-device highlight merge only knew how to rebuild
   annotations in the EPUB engine's format; on a PDF/CBZ it would still plant
