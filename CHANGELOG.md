@@ -94,6 +94,13 @@ All notable changes to Tome are documented here. Format loosely follows
   Small "i" hints explain the progress and reading-intensity charts in plain language.
 
 ### Fixed
+- **Re-downloading a book no longer deletes its synced highlights.** A fresh
+  copy of a book starts with an empty annotation sidecar; the sync used to read
+  that as "the user deleted every highlight" and pushed the deletions to the
+  server (verified live — one re-download tombstoned the book's highlights
+  everywhere). The sync now recognises a sidecar it hasn't seen before and
+  re-applies the server's highlights instead. Deleting highlights on the device
+  still propagates exactly as before.
 - **Highlights from another device can no longer land on the wrong words.**
   Before painting a highlight that was made elsewhere, the plugin (build 28)
   now verifies the stored position actually reproduces the highlighted text on
