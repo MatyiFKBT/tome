@@ -72,6 +72,14 @@ All notable changes to Tome are documented here. Format loosely follows
   Small "i" hints explain the progress and reading-intensity charts in plain language.
 
 ### Fixed
+- **The KOReader reading-history import no longer risks out-of-memory on big
+  histories.** The plugin used to load every page-stat row since the last sync
+  into memory at once — tens of thousands of rows on a device with years of
+  reading — and resend the full book list with every upload chunk. It now reads
+  and uploads in small windows (verified against a real 34,000-row device
+  database), sends each chunk only the books it references, and an interrupted
+  run still resumes exactly where it left off. Plugin build 26; update from
+  TomeSync's "Check for updates" as usual.
 - **The series-page action buttons line up again when you follow a series.** The
   "Next: Vol N" caption under the Following button used to push the button out of
   line with Resume / Mark all read / Manage; it now hangs below without shifting

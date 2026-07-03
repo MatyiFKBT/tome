@@ -42,8 +42,8 @@ logger = logging.getLogger(__name__)
 # build than 13 — otherwise a device that updated to 1.2.1's build-13 impl and
 # later points at a main/1.3.0 server (also 13) would not re-download main's
 # richer impl. Hence 14.
-TOMESYNC_PLUGIN_BUILD = 25
-TOMESYNC_PLUGIN_SEMVER = "1.7.0"
+TOMESYNC_PLUGIN_BUILD = 26
+TOMESYNC_PLUGIN_SEMVER = "1.7.1"
 TOMESYNC_PLUGIN_VERSION = str(TOMESYNC_PLUGIN_BUILD)
 
 
@@ -1791,61 +1791,107 @@ function TomeSync:_syncReadingStats(manual)
     end
 
     local SQ3 = require("lua-ljsqlite3/init")
-    local opened, conn = pcall(SQ3.open, path, "ro")
-    if not opened or not conn then tell("Could not open statistics database."); return end
 
-    local books, rows = {{}}, {{}}
-    local read_ok = pcall(function()
-        -- ljsqlite3 returns INTEGER columns as int64 cdata, which rapidjson can't
-        -- encode — tonumber() every numeric field. (TEXT comes back as Lua strings.)
-        local bstmt = conn:prepare("SELECT id, md5, title, authors, pages, total_read_pages FROM book")
-        for r in bstmt:rows() do
-            books[#books + 1] = {{ ko_id = tonumber(r[1]), md5 = r[2] or "", title = r[3] or "",
-                                   authors = r[4], pages = tonumber(r[5]), total_read_pages = tonumber(r[6]) }}
-        end
-        bstmt:close()
-        local pstmt = conn:prepare(
-            "SELECT id_book, page, start_time, duration, total_pages FROM page_stat_data "
-            .. "WHERE start_time >= " .. since .. " ORDER BY start_time")
-        for r in pstmt:rows() do
-            rows[#rows + 1] = {{ ko_id = tonumber(r[1]), page = tonumber(r[2]), start_time = tonumber(r[3]),
-                                duration = tonumber(r[4]), total_pages = tonumber(r[5]) }}
-        end
-        pstmt:close()
-    end)
-    pcall(function() conn:close() end)
-    if not read_ok then tell("Could not read statistics database."); return end
-    if #rows == 0 then tell("Reading history already up to date."); return end
+    -- One cheap metadata pass: the book table is one row per book, and COUNT(*)
+    -- sizes the progress message. Page rows are windowed below — memory stays
+    -- flat no matter how many years of history the device holds (a real Kindle
+    -- DB measures tens of thousands of page_stat_data rows; the old slurp-all
+    -- approach materialised every one of them as a Lua table at once).
+    local books_by_id, total = {{}}, 0
+    do
+        local opened, conn = pcall(SQ3.open, path, "ro")
+        if not opened or not conn then tell("Could not open statistics database."); return end
+        local read_ok = pcall(function()
+            -- ljsqlite3 returns INTEGER columns as int64 cdata, which rapidjson can't
+            -- encode — tonumber() every numeric field. (TEXT comes back as Lua strings.)
+            local bstmt = conn:prepare("SELECT id, md5, title, authors, pages, total_read_pages FROM book")
+            for r in bstmt:rows() do
+                books_by_id[tonumber(r[1])] = {{ ko_id = tonumber(r[1]), md5 = r[2] or "", title = r[3] or "",
+                                                 authors = r[4], pages = tonumber(r[5]), total_read_pages = tonumber(r[6]) }}
+            end
+            bstmt:close()
+            local cstmt = conn:prepare("SELECT COUNT(*) FROM page_stat_data WHERE start_time >= " .. since)
+            for r in cstmt:rows() do total = tonumber(r[1]) or 0 end
+            cstmt:close()
+        end)
+        pcall(function() conn:close() end)
+        if not read_ok then tell("Could not read statistics database."); return end
+    end
+    if total == 0 then tell("Reading history already up to date."); return end
 
     self._stats_syncing = true
     local dev   = deviceName()
-    local CHUNK = 2000
-    local total = #rows
+    local CHUNK = 500
     local sent  = 0
+    -- Keyset cursor, strictly after (start_time, rowid). Starting at
+    -- (watermark, -1) keeps the old ">= watermark" boundary refetch: rows that
+    -- share the watermark second are re-sent and no-op server-side (the import
+    -- is INSERT OR IGNORE on the identity key). An interrupted run resumes
+    -- from the server watermark on the next launch, exactly as before.
+    local cur_start, cur_rowid = since, -1
+
+    local function readWindow()
+        local opened, conn = pcall(SQ3.open, path, "ro")
+        if not opened or not conn then return nil end
+        local rows = {{}}
+        local ok = pcall(function()
+            local stmt = conn:prepare(string.format(
+                "SELECT rowid, id_book, page, start_time, duration, total_pages FROM page_stat_data "
+                .. "WHERE start_time > %d OR (start_time = %d AND rowid > %d) "
+                .. "ORDER BY start_time, rowid LIMIT %d", cur_start, cur_start, cur_rowid, CHUNK))
+            for r in stmt:rows() do
+                rows[#rows + 1] = {{ rowid = tonumber(r[1]), ko_id = tonumber(r[2]), page = tonumber(r[3]),
+                                     start_time = tonumber(r[4]), duration = tonumber(r[5]), total_pages = tonumber(r[6]) }}
+            end
+            stmt:close()
+        end)
+        pcall(function() conn:close() end)
+        if not ok then return nil end
+        return rows
+    end
+
     local function finish(msg, force)
         self._stats_syncing = false
         if manual or force then UIManager:show(InfoMessage:new{{ text = msg, timeout = 3 }}) end
     end
     local sendNext
     sendNext = function()
-        if sent >= total then
-            finish(string.format("Reading history synced (%d records).", total))
-            return
-        end
         if not NetworkMgr:isConnected() then
             finish("Reading-history sync paused (offline). Resumes later.")
             return
         end
-        local chunk = {{}}
-        local stop = math.min(sent + CHUNK, total)
-        for i = sent + 1, stop do chunk[#chunk + 1] = rows[i] end
+        local rows = readWindow()
+        if rows == nil then
+            finish("Could not read statistics database.")
+            return
+        end
+        if #rows == 0 then
+            finish(string.format("Reading history synced (%d records).", sent))
+            return
+        end
+        -- Send only the books this window references, not the whole table
+        -- with every chunk. Rows whose book row has vanished are still sent
+        -- (server skips them, same as before) but never block the cursor.
+        local chunk_books, seen = {{}}, {{}}
+        local payload = {{}}
+        for i = 1, #rows do
+            local r = rows[i]
+            if books_by_id[r.ko_id] and not seen[r.ko_id] then
+                seen[r.ko_id] = true
+                chunk_books[#chunk_books + 1] = books_by_id[r.ko_id]
+            end
+            payload[#payload + 1] = {{ ko_id = r.ko_id, page = r.page, start_time = r.start_time,
+                                       duration = r.duration, total_pages = r.total_pages }}
+        end
         local resp = apiRequest("POST", "/tome-sync/stats/import",
-            {{ device = dev, books = books, page_stats = chunk }})
+            {{ device = dev, books = chunk_books, page_stats = payload }})
         if type(resp) ~= "table" then
             finish("Reading-history sync interrupted. Resumes next launch.")
             return
         end
-        sent = stop
+        local last = rows[#rows]
+        cur_start, cur_rowid = last.start_time, last.rowid
+        sent = sent + #rows
         -- Yield to the UI between chunks (the device stays responsive).
         UIManager:scheduleIn(0.05, sendNext)
     end

@@ -159,5 +159,9 @@ def test_build_bumped_for_rebake():
     # web reader arrive under a provisional "web:" anchor; the plugin locates the
     # text natively, creates a first-class KOReader highlight, and the sync push
     # (adopted_from) retires the provisional server-side.
-    assert TOMESYNC_PLUGIN_BUILD >= 25
-    assert TOMESYNC_PLUGIN_SEMVER == "1.7.0"
+    # 1.7.1 / build 26 makes the reading-history backfill memory-bounded:
+    # keyset-windowed reads over (start_time, rowid) instead of loading every
+    # page-stat row since the watermark at once, and each upload chunk carries
+    # only the books it references. Verified against a 34k-row device DB.
+    assert TOMESYNC_PLUGIN_BUILD >= 26
+    assert TOMESYNC_PLUGIN_SEMVER == "1.7.1"
