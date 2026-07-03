@@ -5,10 +5,14 @@ import type { ReadingDNA, ReadingDNATrait } from './shared'
 
 const COLLAPSE_KEY = 'tome_dna_collapsed'
 
-/** A pole-to-pole spectrum bar with the reader's position marked. */
+/** A pole-to-pole spectrum bar with the reader's position marked. Rendered as a
+ *  center-origin gauge — no thumb — because the round dot on a track read as a
+ *  draggable slider and invited pointless dragging on a read-only stat. */
 function TraitBar({ trait }: { trait: ReadingDNATrait }) {
   const s = Math.max(0, Math.min(100, trait.score))
   const high = s >= 50
+  // A dead-center score still shows a small nub so the bar never looks empty.
+  const fill = Math.max(Math.abs(s - 50), 2.5)
   return (
     <div>
       <div className="flex items-center justify-between text-[11px] mb-1.5">
@@ -18,13 +22,8 @@ function TraitBar({ trait }: { trait: ReadingDNATrait }) {
       <div className="relative h-1.5 rounded-full bg-muted">
         <span className="absolute top-[-2px] bottom-[-2px] w-px bg-border left-1/2" />
         <span
-          className="absolute top-0 bottom-0 rounded-full bg-primary/45"
-          style={{ left: `${Math.min(s, 50)}%`, width: `${Math.abs(s - 50)}%` }}
-        />
-        <span
-          className="absolute top-1/2 w-3 h-3 rounded-full bg-primary border-2 border-card shadow-[0_0_0_1px_var(--border)] -translate-x-1/2 -translate-y-1/2"
-          // Clamp the marker inside the track — at 0/100 the dot half-clipped.
-          style={{ left: `${Math.min(Math.max(s, 3), 97)}%` }}
+          className="absolute top-0 bottom-0 rounded-full bg-primary"
+          style={high ? { left: '50%', width: `${fill}%` } : { right: '50%', width: `${fill}%` }}
         />
       </div>
     </div>

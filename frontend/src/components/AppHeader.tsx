@@ -41,7 +41,9 @@ export function AppHeader({ onMenuClick, search, actions, onUploadClick }: {
           {onUploadClick && isMember(user) && (
             <button
               onClick={onUploadClick}
-              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium border border-border bg-card hover:bg-muted transition-all touch-feedback"
+              // The bar's one real action — solid accent so it anchors the right
+              // cluster instead of blending into the neutral chips around it.
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-primary text-primary-foreground hover:bg-primary/90 transition-all touch-feedback"
             >
               <Upload className="w-3.5 h-3.5" />
               <span className="hidden sm:inline">Upload</span>
@@ -71,7 +73,9 @@ export function HeaderSearch({ value, onChange, onClear, onSubmit, inputRef, pla
         aria-label="Search books"
         // On phones the box can shrink to a sliver (page actions squeeze it) and
         // the placeholder clips mid-letter — hide it there; the icon says enough.
-        className="w-full h-8 pl-9 pr-8 rounded-lg bg-muted border border-border text-sm placeholder:text-muted-foreground max-sm:placeholder:text-transparent focus:outline-none focus:ring-1 focus:ring-ring"
+        // Rests quiet (tinted fill, no border), sharpens on focus — filled AND
+        // bordered at rest made it the heaviest element in the whole bar.
+        className="w-full h-8 pl-9 pr-8 rounded-lg bg-muted/60 border border-transparent text-sm placeholder:text-muted-foreground max-sm:placeholder:text-transparent transition-colors hover:bg-muted focus:bg-card focus:border-border focus:outline-none focus:ring-1 focus:ring-ring"
         placeholder={placeholder}
         value={value}
         onChange={e => onChange(e.target.value)}

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { RefreshCw } from 'lucide-react'
 import { useKosyncStatus } from '@/hooks/useKosyncStatus'
 import { cn } from '@/lib/utils'
 
@@ -21,10 +22,12 @@ function formatRelative(iso: string | null): string {
   return new Date(ts).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 }
 
-function dotColor(diff: number): string {
-  if (diff < FRESH_MS) return 'bg-success'
-  if (diff < RECENT_MS) return 'bg-warning'
-  return 'bg-muted-foreground/40'
+// Freshness tints the sync glyph itself — a bare colored dot next to "12h ago"
+// never said what the chip was about.
+function iconColor(diff: number): string {
+  if (diff < FRESH_MS) return 'text-success'
+  if (diff < RECENT_MS) return 'text-warning'
+  return 'text-muted-foreground/60'
 }
 
 export function SyncStatusBadge() {
@@ -52,7 +55,7 @@ export function SyncStatusBadge() {
       className="inline-flex items-center gap-1.5 h-7 px-1.5 sm:px-2 rounded-md text-xs text-muted-foreground hover:text-foreground hover:bg-muted transition-colors cursor-default select-none"
       aria-label={`KOReader sync: ${label}. ${tooltip}`}
     >
-      <span className={cn('w-2 h-2 sm:w-1.5 sm:h-1.5 rounded-full', dotColor(diff))} />
+      <RefreshCw className={cn('w-3.5 h-3.5 sm:w-3 sm:h-3', iconColor(diff))} />
       <span className="font-medium tabular-nums hidden sm:inline">{label}</span>
     </div>
   )

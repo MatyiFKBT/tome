@@ -2,8 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth, isMember } from '@/contexts/AuthContext'
 import { useToast } from '@/contexts/ToastContext'
-import { api } from '@/lib/api'
-import type { Library, SavedFilter } from '@/lib/books'
+import { useSidebarLists } from '@/lib/sidebarLists'
 import { Sidebar } from '@/components/Sidebar'
 import { AppHeader, HeaderSearch } from '@/components/AppHeader'
 import { UploadModal } from '@/components/UploadModal'
@@ -32,8 +31,7 @@ export function AppShell({
   const navigate = useNavigate()
   const { user } = useAuth()
   const { toast } = useToast()
-  const [libraries, setLibraries] = useState<Library[]>([])
-  const [savedFilters, setSavedFilters] = useState<SavedFilter[]>([])
+  const { libraries, savedFilters, loadLibraries, loadSavedFilters } = useSidebarLists(user?.id)
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false)
   const [uploadOpen, setUploadOpen] = useState(false)
   const [searchInput, setSearchInput] = useState('')
@@ -61,8 +59,8 @@ export function AppShell({
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [])
 
-  const loadLibraries = () => { api.get<Library[]>('/libraries').then(setLibraries).catch(() => {}) }
-  const loadSavedFilters = () => { api.get<SavedFilter[]>('/saved-filters').then(setSavedFilters).catch(() => {}) }
+  // Cached across page mounts (see useSidebarLists) — this refetch only
+  // freshens the lists in the background, it never blanks them.
   useEffect(() => { loadLibraries(); loadSavedFilters() }, [])
 
   return (

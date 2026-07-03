@@ -291,7 +291,9 @@ export function Sidebar({ libraries, savedFilters, activeTab, onLibrariesChange,
         />
       )}
       <aside className={cn(
-        'hidden md:flex shrink-0 flex-col border-r border-border bg-card/30 transition-all duration-200',
+        // Same recede tint as the Home rail — the content column is the page's
+        // one elevated surface, and the nav frames it instead of competing.
+        'hidden md:flex shrink-0 flex-col border-r border-border bg-muted/40 transition-all duration-200',
         open ? 'w-52' : 'w-10'
       )}>
         {!open && (
@@ -1086,11 +1088,11 @@ function SidebarItem({ label, iconName, count, active, isPrivate, onClick, onEdi
           <Lock className="w-3 h-3 text-muted-foreground/50" />
         </span>
       )}
-      {count != null && !isPrivate && (
-        <span className={cn(
-          'text-[10px] shrink-0 group-hover:hidden group-focus-within:hidden',
-          count === 0 ? 'text-muted-foreground/40' : 'text-muted-foreground'
-        )}>{count}</span>
+      {/* A ghost "0" on an empty library was pure noise — no count reads cleaner. */}
+      {count != null && count > 0 && !isPrivate && (
+        <span className="text-[10px] shrink-0 text-muted-foreground group-hover:hidden group-focus-within:hidden">
+          {count}
+        </span>
       )}
       <div className="hidden group-hover:flex group-focus-within:flex items-center gap-0.5 shrink-0">
         {onEdit && (

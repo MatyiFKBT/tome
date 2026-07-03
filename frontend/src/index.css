@@ -56,10 +56,11 @@
   --success: oklch(0.52 0.10 155);
   --info: oklch(0.50 0.09 245);
   --warning: oklch(0.58 0.12 70);
-  /* Rating gold — muted (chroma ~0.13, same register as the rest of the palette),
-     hue 78 sits warmer than --warning (70) so it reads distinct from "Reading".
-     Light needs a deeper gold to hold contrast on near-white paper. */
-  --rating: oklch(0.64 0.13 78);
+  /* Rating gold — muted (chroma ~0.11, same register as the rest of the palette),
+     hue 76 sits warmer than --warning (70) so it reads distinct from "Reading".
+     Light needs a deeper gold to hold contrast on near-white paper. Kept a notch
+     under the old 0.13 — a five-star grid row was the loudest color on the page. */
+  --rating: oklch(0.62 0.11 76);
   --border: oklch(0.90 0.005 85);
   --input: oklch(0.88 0.005 85);
   --ring: oklch(0.45 0.115 18);
@@ -77,12 +78,12 @@
   --card-foreground: oklch(0.955 0.004 80);
   --popover: oklch(0.21 0.005 60);
   --popover-foreground: oklch(0.955 0.004 80);
-  --primary: oklch(0.63 0.10 22);
+  --primary: oklch(0.64 0.12 22);
   --primary-foreground: oklch(0.98 0.005 18);
   --secondary: oklch(0.265 0.005 60);
   --secondary-foreground: oklch(0.955 0.004 80);
   --muted: oklch(0.265 0.005 60);
-  --muted-foreground: oklch(0.71 0.008 70);
+  --muted-foreground: oklch(0.74 0.008 70);
   --accent: oklch(0.265 0.005 60);
   --accent-foreground: oklch(0.955 0.004 80);
   --destructive: oklch(0.70 0.19 28);
@@ -91,12 +92,15 @@
   --warning: oklch(0.78 0.11 75);
   /* Lighter on dark surfaces so the muted gold still reads (cf. the value
      tuned live on dark). Inherited by Ember + Black, which only override surfaces. */
-  --rating: oklch(0.72 0.12 80);
-  --border: oklch(0.95 0.008 60 / 11%);
-  --input: oklch(0.95 0.008 60 / 15%);
-  --ring: oklch(0.63 0.10 22);
-  --chart-accent: oklch(0.63 0.10 22);
-  --accent-soft: oklch(0.63 0.10 22 / 0.16);
+  --rating: oklch(0.71 0.10 79);
+  /* Border/input alpha and muted-foreground sit a step higher than light-theme
+     instinct suggests — at 11% the hairlines vanished on most panels and dark
+     read flat. 16% is still a hairline, it just survives being on a 0.21 card. */
+  --border: oklch(0.95 0.008 60 / 16%);
+  --input: oklch(0.95 0.008 60 / 20%);
+  --ring: oklch(0.64 0.12 22);
+  --chart-accent: oklch(0.64 0.12 22);
+  --accent-soft: oklch(0.64 0.12 22 / 0.16);
 }
 
 /* Ember — the warm cappuccino dark: espresso surfaces, same rosewood accent.
@@ -108,9 +112,9 @@
   --secondary: oklch(0.28 0.015 60);
   --muted: oklch(0.28 0.015 60);
   --accent: oklch(0.28 0.015 60);
-  --muted-foreground: oklch(0.71 0.015 70);
-  --border: oklch(0.95 0.015 60 / 11%);
-  --input: oklch(0.95 0.015 60 / 15%);
+  --muted-foreground: oklch(0.74 0.015 70);
+  --border: oklch(0.95 0.015 60 / 16%);
+  --input: oklch(0.95 0.015 60 / 20%);
 }
 
 /* Black — true-black OLED theme, same wine identity.
@@ -122,12 +126,12 @@
   --secondary: oklch(0.20 0.004 60);
   --muted: oklch(0.20 0.004 60);
   --accent: oklch(0.20 0.004 60);
-  --primary: oklch(0.66 0.10 22);
-  --ring: oklch(0.66 0.10 22);
-  --chart-accent: oklch(0.66 0.10 22);
-  --accent-soft: oklch(0.66 0.10 22 / 0.18);
-  --border: oklch(1 0 0 / 13%);
-  --input: oklch(1 0 0 / 17%);
+  --primary: oklch(0.67 0.12 22);
+  --ring: oklch(0.67 0.12 22);
+  --chart-accent: oklch(0.67 0.12 22);
+  --accent-soft: oklch(0.67 0.12 22 / 0.18);
+  --border: oklch(1 0 0 / 17%);
+  --input: oklch(1 0 0 / 21%);
 }
 
 /* Amber (warm parchment) theme */
@@ -151,7 +155,7 @@
   --info: oklch(0.50 0.085 245);
   --warning: oklch(0.56 0.13 65);
   /* Warm parchment runs warmer overall; deepen the gold a touch to hold contrast. */
-  --rating: oklch(0.61 0.13 74);
+  --rating: oklch(0.60 0.115 74);
   --border: oklch(0.89 0.012 70);
   --input: oklch(0.87 0.013 70);
   --ring: oklch(0.50 0.155 52);
