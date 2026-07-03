@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 # build than 13 — otherwise a device that updated to 1.2.1's build-13 impl and
 # later points at a main/1.3.0 server (also 13) would not re-download main's
 # richer impl. Hence 14.
-TOMESYNC_PLUGIN_BUILD = 25
+TOMESYNC_PLUGIN_BUILD = 26
 TOMESYNC_PLUGIN_SEMVER = "1.7.0"
 TOMESYNC_PLUGIN_VERSION = str(TOMESYNC_PLUGIN_BUILD)
 
@@ -2229,7 +2229,10 @@ function TomeSync:_applyServerState(alive, tombstones)
                 -- Rolling (crengine) docs can only draw real xPointers ("/body…");
                 -- anything else (PDF datetime fallbacks, corrupt data) would
                 -- hard-crash drawSavedHighlight → getPosFromXPointer on repaint.
-                local drawable = (not self.ui.rolling) or s.anchor:sub(1, 5) == "/body"
+                -- Paging (PDF/CBZ) docs can't reconstruct foreign annotations at
+                -- all — they need a numeric page and rect tables, which anchors
+                -- don't carry — so there they stay server-side only.
+                local drawable = self.ui.rolling and s.anchor:sub(1, 5) == "/body"
                 local ok = drawable and pcall(function()
                     ann:addItem({{
                         page = s.anchor, pos0 = s.anchor, pos1 = s.anchor_end or s.anchor,
