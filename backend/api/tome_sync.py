@@ -2481,6 +2481,22 @@ function TomeSync:_syncAnnotations()
     local bk = tostring(self.book_id)
     local baseline = self.annot_baseline[bk] or {{}}
 
+    -- Bind the baseline to THIS sidecar instance. A fresh sidecar (new
+    -- download of the book, or a wiped sidecar) starts without our marker:
+    -- its empty annotation list reflects a NEW FILE, not the user deleting
+    -- every highlight — diffing the old baseline against it would push
+    -- deletes and tombstone the book's highlights server-side (observed live:
+    -- re-downloading a book wiped its synced highlight). Reset the baseline
+    -- instead; the pull below re-applies the server state. True deletions
+    -- still propagate: once the marker is set, baseline diffs work as before.
+    if self.ui.doc_settings then
+        if not self.ui.doc_settings:readSetting("tomesync_annot_bound") and next(baseline) ~= nil then
+            baseline = {{}}
+            self.annot_baseline[bk] = {{}}
+        end
+        self.ui.doc_settings:saveSetting("tomesync_annot_bound", true)
+    end
+
     local upserts, deletes = {{}}, {{}}
     for anchor, L in pairs(localmap) do
         if baseline[anchor] == nil or baseline[anchor] ~= L.mtime then

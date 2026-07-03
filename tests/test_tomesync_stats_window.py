@@ -107,3 +107,14 @@ def test_foreign_highlights_are_verified_before_painting(impl):
     assert "New highlight from another device: reconstruct so it renders." not in impl
     # pushes translate repaired items back to the server identity
     assert "it.anchor = anchor" in impl
+
+
+def test_baseline_bound_to_sidecar_instance(impl):
+    """Re-downloading a book must not tombstone its highlights: the annotation
+    baseline only diffs against a sidecar it has seen before (marker
+    tomesync_annot_bound); a fresh sidecar resets the baseline instead of
+    treating its emptiness as user deletions."""
+    assert "tomesync_annot_bound" in impl
+    i_guard = impl.index('readSetting("tomesync_annot_bound")')
+    i_deletes = impl.index("table.insert(deletes,")
+    assert i_guard < i_deletes, "guard must run before the delete diff"
