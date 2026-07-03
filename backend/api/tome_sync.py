@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 # build than 13 — otherwise a device that updated to 1.2.1's build-13 impl and
 # later points at a main/1.3.0 server (also 13) would not re-download main's
 # richer impl. Hence 14.
-TOMESYNC_PLUGIN_BUILD = 29
+TOMESYNC_PLUGIN_BUILD = 30
 TOMESYNC_PLUGIN_SEMVER = "1.7.4"
 TOMESYNC_PLUGIN_VERSION = str(TOMESYNC_PLUGIN_BUILD)
 
@@ -2362,7 +2362,8 @@ function TomeSync:_applyServerState(alive, tombstones)
             local smtime = s.datetime_updated or s.datetime or ""
             if not L then
                 -- New highlight from another device: verify it reproduces its
-                -- text on THIS copy before drawing; repair or skip otherwise.
+                -- text on THIS copy before drawing; repair or skip otherwise
+                -- (paging docs reconstruct nothing — see _applyForeign).
                 changed = self:_applyForeign(ann, s) or changed
             elseif smtime > L.mtime then
                 -- Newer edit from elsewhere wins (note/color/text).
@@ -2448,9 +2449,13 @@ function TomeSync:_applyForeign(ann, s)
     end
 
     if not self.ui.rolling then
-        -- PDF: positions aren't xPointers and extracted text isn't comparable —
-        -- keep the pre-verify behaviour (the /body guard is a crengine concern).
-        return add(s.anchor, s.anchor_end or s.anchor)
+        -- Paging (PDF/CBZ) docs can't reconstruct foreign annotations at all:
+        -- they need a numeric page and rect tables, which sync anchors don't
+        -- carry — planting strings corrupts the annotation list and crashes
+        -- the reader on repaint. They stay server-side only (skipped items
+        -- never enter the local map or baseline, so nothing is resurrected
+        -- or spuriously deleted).
+        return false
     end
 
     local want = norm(s.highlighted_text)

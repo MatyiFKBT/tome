@@ -180,5 +180,11 @@ def test_build_bumped_for_rebake():
     # position heartbeat is idle-debounced off the page-turn path. (A Trapper
     # subprocess variant for fetches was built and dropped: forked sockets
     # from plugin context proved unverifiable on the emulator.)
-    assert TOMESYNC_PLUGIN_BUILD >= 29
+    # Build numbering note: TWO build 26s shipped from parallel branches on
+    # 2026-07-03 (main: the paging-annotation guard; the foundations stack:
+    # the memory-bounded backfill). The merge resolves to build 30 so every
+    # device re-fetches regardless of which 26 it took; 27-29 are the
+    # foundations-stack builds (identity+clustering, verify/repair, UX batch),
+    # and the paging guard's semantics are folded into _applyForeign.
+    assert TOMESYNC_PLUGIN_BUILD >= 30
     assert TOMESYNC_PLUGIN_SEMVER == "1.7.4"

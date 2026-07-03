@@ -121,6 +121,14 @@ All notable changes to Tome are documented here. Format loosely follows
   database), sends each chunk only the books it references, and an interrupted
   run still resumes exactly where it left off. Plugin build 26; update from
   TomeSync's "Check for updates" as usual.
+- **Annotations from another device can no longer break a book opened as a PDF
+  or comic.** The cross-device highlight merge only knew how to rebuild
+  annotations in the EPUB engine's format; on a PDF/CBZ it would still plant
+  incoming ones as broken highlights — positions stored as text where the
+  renderer expects page numbers and rectangles. The plugin (build 26) now
+  reconstructs an annotation only when the receiving book can actually draw it;
+  everything else stays safely in Tome instead of corrupting the book's
+  annotation list.
 - **The series-page action buttons line up again when you follow a series.** The
   "Next: Vol N" caption under the Following button used to push the button out of
   line with Resume / Mark all read / Manage; it now hangs below without shifting
