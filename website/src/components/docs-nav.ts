@@ -32,6 +32,7 @@ export const DOCS_NAV: DocGroup[] = [
     label: 'Integrations',
     items: [
       { href: '/docs/sso',                title: 'Single sign-on (OIDC)' },
+      { href: '/docs/hardcover',          title: 'Hardcover sync' },
       { href: '/docs/koreader',           title: 'KOReader plugin' },
       { href: '/docs/opds',               title: 'OPDS feed' },
       { href: '/docs/scribe',             title: 'Scribe (CLI)' },
