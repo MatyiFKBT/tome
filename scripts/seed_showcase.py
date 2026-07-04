@@ -351,8 +351,12 @@ def generate_sessions(
         else:
             n_sessions = rng.choices([1, 2, 3], weights=[0.55, 0.35, 0.10])[0]
 
-        # Pick available books from rotation. If no rotation on this date, use any currently-reading
-        avail = rotation_by_date.get(d) or currently_reading_slugs
+        # Pick available books from rotation. Days with no book in rotation get
+        # no sessions — falling back to the currently-reading books here would
+        # scatter year-old sessions onto them ("read one book over 12 months").
+        avail = rotation_by_date.get(d)
+        if not avail:
+            continue
 
         for _ in range(n_sessions):
             slug = rng.choice(avail)

@@ -431,8 +431,7 @@ const SHOTS = [
     viewport: { width: 1600, height: 1200, deviceScaleFactor: 2 },
     settle: 1000,
     after: async (page) => {
-      await page.locator('button:has-text("Send to Device")').first().click().catch(() => {})
-      await page.waitForTimeout(600)
+      await openSendEmailModal(page)
       await maskModalBackdrop(page)
     },
     element: 'div.max-w-md:has(h2:has-text("Send to Device"))',
@@ -446,8 +445,7 @@ const SHOTS = [
     after: async (page) => {
       await page.locator('button:has-text("Select")').first().click().catch(() => {})
       await page.waitForTimeout(400)
-      await page.locator('div:has(> span:has-text("selected")) button:has-text("Send to Device")').first().click().catch(() => {})
-      await page.waitForTimeout(600)
+      await openSendEmailModal(page)
       await maskModalBackdrop(page)
     },
     element: 'div.max-w-md:has(h2:has-text("Send to Device"))',
@@ -737,6 +735,62 @@ const SHOTS = [
       await page.waitForTimeout(400)
     },
   },
+  // ── Hardcover sync (showcase DB pre-seeded with demo match state) ──────────
+  // Flat list — every sync candidate with cover, state badge, rating, actions.
+  {
+    name: 'hardcover',
+    path: '/hardcover',
+    viewport: { width: 1600, height: 1250, deviceScaleFactor: 2 },
+    waitFor: 'button:has-text("Sync now")',
+    settle: 900,
+  },
+  // Series-stacked view (same grouping as All Books).
+  {
+    name: 'hardcover-grouped',
+    path: '/hardcover',
+    viewport: { width: 1600, height: 1250, deviceScaleFactor: 2 },
+    waitFor: 'button:has-text("Sync now")',
+    settle: 900,
+    prefs: { tome_hardcover_group: 'true' },
+  },
+  // Settings → Hardcover: linked account, sync toggle, counts.
+  {
+    name: 'settings-hardcover',
+    path: '/settings',
+    viewport: { width: 1600, height: 2400, deviceScaleFactor: 2 },
+    settle: 1000,
+    after: async (page) => {
+      await page.evaluate(() => {
+        const sections = [...document.querySelectorAll('section')]
+        const target = sections.find(s => s.querySelector('h2')?.textContent?.trim() === 'Hardcover')
+        if (target) {
+          target.scrollIntoView({ block: 'center' })
+          target.style.padding = '48px 32px'
+        }
+      })
+      await page.waitForTimeout(400)
+    },
+    element: 'section:has(h2:text-is("Hardcover"))',
+  },
+  // Book page progress bar with the edition-derived "p. X of Y".
+  {
+    name: 'hardcover-book-pages',
+    path: () => `/books/${bookIds.dungeonMauling ?? 1}`,
+    viewport: { width: 1600, height: 1400, deviceScaleFactor: 2 },
+    settle: 1000,
+    after: async (page) => {
+      await page.evaluate(() => {
+        const el = [...document.querySelectorAll('div, section')]
+          .find(n => /p\.\s*\d+ of \d+/.test(n.textContent || '') && n.querySelectorAll('*').length < 80)
+        if (el) {
+          el.scrollIntoView({ block: 'center' })
+          el.style.padding = '48px 32px'
+        }
+      })
+      await page.waitForTimeout(400)
+    },
+    autoCrop: true,
+  },
 ]
 
 async function login() {
@@ -793,7 +847,7 @@ async function seekToAnnotation(page) {
 
 async function resolveBookIds(token) {
   // Look up book IDs by title. Keeps the script working across re-seeds.
-  const wanted = { frankenstein: 'Frankenstein', goodGuys2: 'Heir Today, Pawn Tomorrow', hitchhiker: "The Hitchhiker's Guide to the Galaxy", dune: 'Dune', berserk1: 'Berserk, Vol. 1' }
+  const wanted = { frankenstein: 'Frankenstein', goodGuys2: 'Heir Today, Pawn Tomorrow', hitchhiker: "The Hitchhiker's Guide to the Galaxy", dune: 'Dune', berserk1: 'Berserk, Vol. 1', dungeonMauling: 'Dungeon Mauling' }
   for (const [key, title] of Object.entries(wanted)) {
     try {
       const r = await fetch(`${API}/api/books?q=${encodeURIComponent(title)}&per_page=5`, {
@@ -832,13 +886,29 @@ async function maskModalBackdrop(page) {
       el.style.webkitBackdropFilter = 'none'
     })
     document.querySelectorAll('.absolute.inset-0').forEach(el => {
-      if (el.className.includes('bg-black')) {
+      // el.className is an SVGAnimatedString on SVG elements — use the attribute
+      if ((el.getAttribute('class') || '').includes('bg-black')) {
         el.style.background = bg
         el.style.backdropFilter = 'none'
         el.style.webkitBackdropFilter = 'none'
       }
     })
   })
+}
+
+// Open the email send modal regardless of the TOME_SEND_TO_KOREADER flag:
+// flag off → plain "Send to Device" button; flag on → split "Send to KOReader ▾"
+// button whose dropdown holds "Send via email…".
+async function openSendEmailModal(page) {
+  const plain = page.locator('button:has-text("Send to Device")').first()
+  if (await plain.count()) {
+    await plain.click().catch(() => {})
+  } else {
+    await page.locator('button[aria-label="More send options"]').first().click().catch(() => {})
+    await page.waitForTimeout(250)
+    await page.locator('button:has-text("Send via email")').first().click().catch(() => {})
+  }
+  await page.waitForTimeout(600)
 }
 
 async function captureShot(browser, token, shot) {

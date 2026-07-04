@@ -141,7 +141,8 @@ import { withBase } from '../../lib/path'
 
   <h2>Ratings &amp; reviews</h2>
   <p>
-    Rate books on a 1–5 star scale with an optional written review. Ratings are
+    Rate books on a 1–5 star scale in <strong>half-star steps</strong> — click the left or right
+    half of a star for a 3.5 or 4.5 — with an optional written review. Ratings are
     <strong>per user and private to you</strong> — everyone keeps their own.
   </p>
   <ul>
@@ -151,6 +152,9 @@ import { withBase } from '../../lib/path'
   </ul>
   <p>
     Ratings also sync both ways with KOReader's native Book status screen — see the
-    <a href={withBase("/docs/koreader")}>KOReader plugin</a> docs.
+    <a href={withBase("/docs/koreader")}>KOReader plugin</a> docs (KOReader itself is whole-star:
+    the plugin rounds a pulled half-star for the device but never pushes the rounded value back).
+    And with a linked <a href={withBase("/docs/hardcover")}>Hardcover account</a>, ratings — half-stars
+    included — flow to your public profile too.
   </p>
 </DocsLayout>
