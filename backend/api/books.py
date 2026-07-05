@@ -1124,6 +1124,7 @@ def get_book_reading_stats(
     from backend.services.reading_stats import (
         compute_book_reading_stats,
         compute_book_aggregate_stats,
+        compute_book_chapter_times,
         compute_book_page_intensity,
     )
 
@@ -1141,8 +1142,10 @@ def get_book_reading_stats(
     )
     # Per-page intensity from imported KOReader page-stats (None if web-only reading)
     intensity = compute_book_page_intensity(db, user_id=current_user.id, book_id=book_id, tz_offset=tz_offset)
+    # Time per TOC chapter (None without a chapter map or page-stats)
+    chapters = compute_book_chapter_times(db, user_id=current_user.id, book_id=book_id)
 
-    return {"own": own, "aggregate": aggregate, "intensity": intensity}
+    return {"own": own, "aggregate": aggregate, "intensity": intensity, "chapters": chapters}
 
 
 class ManualSessionIn(PydanticBaseModel):
@@ -2120,6 +2123,7 @@ def upload_book(
         language=meta.get("language"),
         year=meta.get("year"),
         word_count=meta.get("word_count"),
+        page_count=meta.get("page_count"),
         cover_path=meta.get("cover_path"),
         content_hash=content_hash,
         status="active",
@@ -2128,6 +2132,9 @@ def upload_book(
     )
     db.add(book)
     db.flush()
+
+    from backend.services.chapters import replace_book_chapters
+    replace_book_chapters(db, book.id, meta.get("_chapters"))
 
     db.add(BookFile(
         book_id=book.id,
@@ -2359,10 +2366,16 @@ def ingest_book(
     ))
     record_ko_hash(db, book.id, ko_partial_md5(dest), "raw")
 
-    # Word count (EPUB only) — parsed from the ingested file on disk.
+    # Word count + chapter map (EPUB only) — parsed from the ingested file on
+    # disk. Fixed-layout formats get an intrinsic page count instead.
     if suffix == "epub":
-        from backend.services.metadata import count_words_epub
+        from backend.services.metadata import count_words_epub, extract_chapters_epub
+        from backend.services.chapters import replace_book_chapters
         book.word_count = count_words_epub(dest)
+        replace_book_chapters(db, book.id, extract_chapters_epub(dest))
+    elif suffix in ("pdf", "cbz", "cbr"):
+        from backend.services.metadata import count_pages_fixed_layout
+        book.page_count = count_pages_fixed_layout(dest)
 
     # Tags
     if meta.tags:

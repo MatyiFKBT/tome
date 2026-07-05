@@ -32,8 +32,13 @@ from typing import Optional
 from sqlalchemy import func
 
 from backend.core.database import SessionLocal
-from backend.models.book import Book, BookFile
-from backend.services.metadata import count_words_epub
+from backend.models.book import Book, BookChapter, BookFile
+from backend.services.chapters import replace_book_chapters
+from backend.services.metadata import (
+    count_pages_fixed_layout,
+    count_words_epub,
+    extract_chapters_epub,
+)
 
 log = logging.getLogger(__name__)
 
@@ -51,8 +56,9 @@ class WordCountAlreadyRunning(Exception):
     pass
 
 
-def _epub_books() -> dict[int, tuple[Optional[int], int, str]]:
-    """One row per book that has an EPUB file: book_id → (word_count, size, path).
+def _epub_books() -> dict[int, tuple[Optional[int], int, str, bool]]:
+    """One row per book that has an EPUB file:
+    book_id → (word_count, size, path, has_chapters).
     If a book has several EPUB files we keep the first."""
     with SessionLocal() as db:
         rows = (
@@ -66,10 +72,34 @@ def _epub_books() -> dict[int, tuple[Optional[int], int, str]]:
             .filter(func.lower(BookFile.format) == "epub")
             .all()
         )
-    out: dict[int, tuple[Optional[int], int, str]] = {}
+        chaptered = {
+            r[0] for r in db.query(BookChapter.book_id).distinct().all()
+        }
+    out: dict[int, tuple[Optional[int], int, str, bool]] = {}
     for book_id, wc, size, path in rows:
         if book_id not in out:
-            out[book_id] = (wc, size or 0, path)
+            out[book_id] = (wc, size or 0, path, book_id in chaptered)
+    return out
+
+
+def _fixed_layout_books() -> list[tuple[int, str, int]]:
+    """Books with a PDF/CBZ/CBR file and no intrinsic page count yet."""
+    with SessionLocal() as db:
+        rows = (
+            db.query(Book.id, BookFile.file_path, BookFile.file_size)
+            .join(BookFile, BookFile.book_id == Book.id)
+            .filter(
+                Book.page_count.is_(None),
+                func.lower(BookFile.format).in_(("pdf", "cbz", "cbr")),
+            )
+            .all()
+        )
+    seen: set[int] = set()
+    out: list[tuple[int, str, int]] = []
+    for book_id, path, size in rows:
+        if book_id not in seen:
+            seen.add(book_id)
+            out.append((book_id, path, size or 0))
     return out
 
 
@@ -78,15 +108,19 @@ def preflight() -> dict:
     books = _epub_books()
     total = len(books)
     pending = pending_bytes = 0
-    for wc, size, _path in books.values():
-        if wc is None:
+    for wc, size, _path, has_ch in books.values():
+        if wc is None or not has_ch:
             pending += 1
             pending_bytes += size
+    pages = _fixed_layout_books()
     return {
         "epub_total": total,
         "already_counted": total - pending,
-        "pending": pending,
-        "pending_bytes": pending_bytes,
+        "pending": pending + len(pages),
+        "pending_bytes": pending_bytes + sum(s for _, _, s in pages),
+        # split, for anyone curious (the UI shows the aggregate)
+        "pending_epubs": pending,
+        "pending_page_counts": len(pages),
     }
 
 
@@ -139,12 +173,17 @@ def start(*, username: Optional[str] = None) -> dict:
         if _state.get("status") == "running":
             raise WordCountAlreadyRunning()
 
-        work: list[tuple[int, str, int]] = []
+        # kind "epub": word count (if missing) + chapter map (if missing).
+        # kind "pages": intrinsic PDF/CBZ/CBR page count.
+        work: list[tuple[int, str, int, str, bool]] = []
         total_bytes = 0
-        for book_id, (wc, size, path) in _epub_books().items():
-            if wc is None:
-                work.append((book_id, path, size))
+        for book_id, (wc, size, path, has_ch) in _epub_books().items():
+            if wc is None or not has_ch:
+                work.append((book_id, path, size, "epub", wc is None))
                 total_bytes += size
+        for book_id, path, size in _fixed_layout_books():
+            work.append((book_id, path, size, "pages", False))
+            total_bytes += size
 
         _cancel.clear()
         _state = {
@@ -197,31 +236,52 @@ def _finish(status: str, error: Optional[str] = None) -> None:
             _state["error"] = error
 
 
-def _run(work: list[tuple[int, str, int]]) -> None:
+def _run(work: list[tuple[int, str, int, str, bool]]) -> None:
     try:
-        for book_id, path, size in work:
+        for book_id, path, size, kind, needs_words in work:
             if _cancel.is_set():
                 _finish("cancelled")
                 return
             _set_current(path)
+
+            if kind == "pages":
+                try:
+                    pages = count_pages_fixed_layout(Path(path))
+                    if pages:
+                        with SessionLocal() as db:
+                            book = db.get(Book, book_id)
+                            if book is not None:
+                                book.page_count = pages
+                                db.commit()
+                    # Page counting is cheap and can't produce words — record it
+                    # as counted so progress advances without skewing the totals.
+                    _record(size=size, words=0 if pages else None, path=path)
+                except Exception:  # noqa: BLE001 — one bad file never aborts the run
+                    log.exception("word-count: page count error on book #%s", book_id)
+                    _record(size=size, words=None, path=path)
+                continue
+
             try:
-                words = count_words_epub(Path(path))
-            except Exception as e:  # noqa: BLE001 — one bad file never aborts the run
+                words = count_words_epub(Path(path)) if needs_words else None
+                chapters = extract_chapters_epub(Path(path))
+            except Exception:  # noqa: BLE001 — one bad file never aborts the run
                 log.exception("word-count: error on book #%s", book_id)
                 _record(size=size, words=None, path=path)
                 continue
-            if words is not None:
-                try:
-                    with SessionLocal() as db:
-                        book = db.get(Book, book_id)
-                        if book is not None:
+            try:
+                with SessionLocal() as db:
+                    book = db.get(Book, book_id)
+                    if book is not None:
+                        if words is not None:
                             book.word_count = words
-                            db.commit()
-                except Exception:  # noqa: BLE001
-                    log.exception("word-count: DB write failed for book #%s", book_id)
-                    _record(size=size, words=None, path=path)
-                    continue
-            _record(size=size, words=words, path=path)
+                        replace_book_chapters(db, book_id, chapters)
+                        db.commit()
+            except Exception:  # noqa: BLE001
+                log.exception("word-count: DB write failed for book #%s", book_id)
+                _record(size=size, words=None, path=path)
+                continue
+            # A chapters-only pass (words already stored) still counts as done.
+            _record(size=size, words=words if needs_words else 0, path=path)
         _finish("done")
     except Exception as e:  # noqa: BLE001
         log.exception("word-count: job crashed")

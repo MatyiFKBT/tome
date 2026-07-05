@@ -360,10 +360,15 @@ def bindery_accept(
             ))
             record_ko_hash(db, book.id, ko_partial_md5(dest), "raw")
 
-            # Word count (EPUB only) — parsed from the accepted file on disk.
+            # Word count + chapter map (EPUB only) — parsed from the accepted
+            # file on disk. Fixed-layout formats get an intrinsic page count.
             if suffix == "epub":
-                from backend.services.metadata import count_words_epub
+                from backend.services.metadata import count_words_epub, extract_chapters_epub
+                from backend.services.chapters import replace_book_chapters
                 book.word_count = count_words_epub(dest)
+                replace_book_chapters(db, book.id, extract_chapters_epub(dest))
+            elif suffix in ("pdf", "cbz", "cbr"):
+                book.page_count = meta.get("page_count")
 
             # Create tag records
             for tag_str in item.tags:
