@@ -103,6 +103,130 @@ def count_words_epub(path: Path) -> Optional[int]:
     return _count_words_from_zip(path)
 
 
+def _extract_epub_chapters(book) -> list[dict]:
+    """TOC → device-independent chapter boundaries as fraction-of-book.
+
+    Fractions come from cumulative word offsets of spine items: a chapter whose
+    TOC entry points into spine item k starts at words(items 0..k-1) / total.
+    Fragment anchors inside a file are ignored — top-level TOC entries almost
+    always sit at a file boundary, and per-file granularity is what the
+    time-per-chapter stat needs. Returns [] when there's no usable structure
+    (no TOC, unresolvable hrefs, or fewer than two distinct chapters).
+    """
+    import ebooklib
+
+    id_to_item = {item.get_id(): item for item in book.get_items_of_type(ebooklib.ITEM_DOCUMENT)}
+    spine_ids = [sid for sid, _linear in book.spine if sid in id_to_item]
+    if not spine_ids:
+        return []
+
+    counts: list[int] = []
+    href_to_idx: dict[str, int] = {}
+    for i, sid in enumerate(spine_ids):
+        item = id_to_item[sid]
+        href_to_idx[item.get_name()] = i
+        try:
+            raw = item.get_content()
+            counts.append(count_words_text(_html_to_text(raw.decode("utf-8", "ignore"))))
+        except Exception:  # noqa: BLE001 — unreadable spine item contributes no words
+            counts.append(0)
+    total = sum(counts)
+    if total <= 0:
+        return []
+    cum = [0]
+    for c in counts:
+        cum.append(cum[-1] + c)
+
+    def resolve(href: str) -> Optional[int]:
+        href = href.split("#", 1)[0]
+        if href in href_to_idx:
+            return href_to_idx[href]
+        # Tolerate OPF-dir path differences by unique basename.
+        base = href.rsplit("/", 1)[-1]
+        hits = [i for h, i in href_to_idx.items() if h.rsplit("/", 1)[-1] == base]
+        return hits[0] if len(hits) == 1 else None
+
+    chapters: list[dict] = []
+    for node in book.toc or []:
+        # Entries are Link or (Section, [children]); a Section may carry its own
+        # href, otherwise its first child anchors it. Only the top level counts —
+        # nested subsections are noise for a per-chapter time split.
+        head = node[0] if isinstance(node, tuple) else node
+        href = getattr(head, "href", None)
+        if not href and isinstance(node, tuple) and node[1]:
+            first = node[1][0]
+            first = first[0] if isinstance(first, tuple) else first
+            href = getattr(first, "href", None)
+        if not href:
+            continue
+        idx = resolve(href)
+        if idx is None:
+            continue
+        title = (getattr(head, "title", None) or "").strip()
+        chapters.append({
+            "title": title or f"Chapter {len(chapters) + 1}",
+            "start_fraction": cum[idx] / total,
+        })
+
+    chapters.sort(key=lambda c: c["start_fraction"])
+    out: list[dict] = []
+    for c in chapters:
+        # Two TOC entries resolving to the same start (front-matter stubs,
+        # in-file subheadings) collapse to the first.
+        if out and c["start_fraction"] <= out[-1]["start_fraction"] + 1e-9:
+            continue
+        out.append(c)
+    if len(out) < 2:
+        return []
+    # Front matter (nav doc, cover page, copyright) sits before the first TOC
+    # entry; fold it into chapter one so the map tiles the whole book.
+    out[0]["start_fraction"] = 0.0
+    for i, c in enumerate(out):
+        c["idx"] = i
+        c["end_fraction"] = out[i + 1]["start_fraction"] if i + 1 < len(out) else 1.0
+    return out
+
+
+def count_pages_fixed_layout(path: Path) -> Optional[int]:
+    """Intrinsic page count for fixed-layout formats (PDF/CBZ/CBR), without
+    doing any of the cover/metadata work extract_metadata does. None for
+    reflowable or unreadable files."""
+    fmt = get_format(path)
+    try:
+        if fmt == "pdf":
+            import fitz
+            with fitz.open(str(path)) as doc:
+                return len(doc) or None
+        if fmt == "cbz":
+            with zipfile.ZipFile(path) as zf:
+                n = sum(1 for name in zf.namelist()
+                        if name.lower().endswith((".jpg", ".jpeg", ".png", ".webp"))
+                        and not name.startswith("__MACOSX"))
+                return n or None
+        if fmt == "cbr":
+            import rarfile
+            with rarfile.RarFile(str(path)) as rf:
+                n = sum(1 for name in rf.namelist()
+                        if name.lower().endswith((".jpg", ".jpeg", ".png", ".webp")))
+                return n or None
+    except Exception as e:  # noqa: BLE001
+        logger.warning("page count error for %s: %s", path, e)
+    return None
+
+
+def extract_chapters_epub(path: Path) -> list[dict]:
+    """Open an EPUB from disk and extract its chapter map. Used by the backfill
+    job; ingest reuses the already-open book via _extract_epub_chapters."""
+    try:
+        from ebooklib import epub
+
+        book = epub.read_epub(str(path), options={"ignore_ncx": True})
+        return _extract_epub_chapters(book)
+    except Exception as e:  # noqa: BLE001 — no chapters is always a valid outcome
+        logger.info("chapter extraction failed for %s: %s", path, e)
+        return []
+
+
 def _opf_meta_by_name(book, name: str) -> Optional[str]:
     """Read an OPF2 <meta name="..." content="..."/> value.
 
@@ -258,6 +382,13 @@ def extract_epub(path: Path, covers_dir: Path) -> dict:
         if wc:
             meta["word_count"] = wc
 
+        # Chapter map (TOC → fraction boundaries) — same open book. Private
+        # key: creation sites persist it as BookChapter rows; API previews
+        # strip underscore keys.
+        chapters = _extract_epub_chapters(book)
+        if chapters:
+            meta["_chapters"] = chapters
+
         # Cover extraction
         cover_id = None
         for item in book.get_metadata("OPF", "cover"):
@@ -312,6 +443,11 @@ def extract_pdf(path: Path, covers_dir: Path) -> dict:
             m = re.match(r"D:(\d{4})", info["creationDate"])
             if m:
                 meta["year"] = int(m.group(1))
+
+        # Intrinsic page count — PDFs are fixed-layout, so this is a real
+        # property of the book (unlike reflowable EPUB pagination).
+        if len(doc) > 0:
+            meta["page_count"] = len(doc)
 
         # Cover: render first page as image
         if len(doc) > 0:
@@ -418,6 +554,11 @@ def extract_cbz(path: Path, covers_dir: Path) -> dict:
             )
             if images:
                 meta["_cover_data"] = zf.read(images[0])
+                # Intrinsic page count: one image = one page. Counted images
+                # are ground truth; ComicInfo's PageCount is only a fallback.
+                meta["page_count"] = len(images)
+            elif meta.get("_page_count"):
+                meta["page_count"] = meta["_page_count"]
     except Exception as e:
         logger.warning("cbz extraction error for %s: %s", path, e)
 
@@ -448,6 +589,9 @@ def extract_cbr(path: Path, covers_dir: Path) -> dict:
             )
             if images:
                 meta["_cover_data"] = rf.read(images[0])
+                meta["page_count"] = len(images)
+            elif meta.get("_page_count"):
+                meta["page_count"] = meta["_page_count"]
     except Exception as e:
         logger.warning("cbr extraction error for %s: %s", path, e)
 
