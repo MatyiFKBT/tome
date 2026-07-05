@@ -56,7 +56,12 @@ logger = logging.getLogger(__name__)
 # author browse axis, read-status write-back (hold a book row); the shared
 # _bookListMenu drill-down shows per-book status markers. Server side: series
 # list N+1 fixed, /tome-sync/{authors,author-books,search} + PUT status.
-TOMESYNC_PLUGIN_BUILD = 33
+# BUILD 34: library sweep — "Sync closed books" walks the device for books
+# TomeSync never synced, resolves them by partial-MD5 in batches
+# (POST /tome-sync/match-hashes) and adopts each sidecar's status/rating/
+# progress via the fill-gaps-only POST /tome-sync/sweep/{book_id}. Ack-gated
+# ledger keyed by sidecar mtime → resumable, re-run-safe.
+TOMESYNC_PLUGIN_BUILD = 34
 TOMESYNC_PLUGIN_SEMVER = "1.8.0"
 TOMESYNC_PLUGIN_VERSION = str(TOMESYNC_PLUGIN_BUILD)
 
@@ -976,6 +981,137 @@ def put_reading_status(
     return {"ok": True, "book_id": book_id, "status": body.status}
 
 
+# ── Library sweep — closed books (build 34) ──────────────────────────────────
+# The plugin walks the device library for books it has NEVER synced (pre-Tome
+# history, other launchers, sideloads), resolves them by partial-MD5 in
+# batches, then adopts each sidecar's state. Adoption is FILL GAPS ONLY: a
+# closed book's stale sidecar must never overwrite state the live sync (or the
+# user, on the web) already owns.
+
+class MatchHashesRequest(PydanticBaseModel):
+    hashes: list[str] = []
+
+    # KOReader's Lua rapidjson encodes an empty table as a JSON object.
+    @field_validator("hashes", mode="before")
+    @classmethod
+    def _empty_obj_to_list(cls, v):
+        return [] if v in (None, {}) else v
+
+
+@router.post("/tome-sync/match-hashes")
+def match_hashes(
+    body: MatchHashesRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(_get_api_key_user),
+):
+    """Batch partial-MD5 → book id resolution (max 500 per call). Only books
+    this user can see are returned — an unmatched hash is indistinguishable
+    from an invisible book, by design."""
+    from backend.services.ko_hash import lookup_book_ids
+
+    hashes = [h for h in body.hashes if isinstance(h, str) and h][:500]
+    found = lookup_book_ids(db, hashes)
+    if not found:
+        return {"matches": {}}
+    visible = {
+        r[0]
+        for r in db.query(Book.id)
+        .filter(
+            Book.id.in_(set(found.values())),
+            Book.status == "active",
+            book_visibility_filter(db, user),
+        )
+        .all()
+    }
+    return {"matches": {m: bid for m, bid in found.items() if bid in visible}}
+
+
+class SweepBody(PydanticBaseModel):
+    status: Optional[str] = None       # reading | read (sidecar summary.status)
+    rating: Optional[float] = None     # 0.5–5.0 half-star steps
+    review: Optional[str] = None
+    percentage: Optional[float] = None  # 0..1 (sidecar percent_finished)
+    progress: Optional[str] = None      # last xpointer
+    device: Optional[str] = None
+
+
+@router.post("/tome-sync/sweep/{book_id}")
+def sweep_book(
+    book_id: int,
+    body: SweepBody,
+    db: Session = Depends(get_db),
+    user: User = Depends(_get_api_key_user),
+):
+    """Adopt a closed book's sidecar state, filling only what the server does
+    not already have:
+
+    - status: applied only over unread/absent — never downgrades curation
+    - rating/review: applied only when no rating exists
+    - position/progress: created only when NO position row exists — an actively
+      synced book keeps its live position untouched
+
+    Returns which fields were actually taken so the plugin can report honestly.
+    """
+    book = db.get(Book, book_id)
+    if not book or book.status != "active" or not user_can_see_book(db, user, book):
+        raise HTTPException(status_code=404, detail="Book not found")
+
+    applied: dict = {}
+    row = (
+        db.query(UserBookStatus)
+        .filter(UserBookStatus.user_id == user.id, UserBookStatus.book_id == book_id)
+        .first()
+    )
+
+    def ensure_row() -> UserBookStatus:
+        nonlocal row
+        if row is None:
+            row = UserBookStatus(user_id=user.id, book_id=book_id, status="unread")
+            db.add(row)
+        return row
+
+    if body.status in ("reading", "read"):
+        r = ensure_row()
+        if r.status in (None, "", "unread"):
+            r.status = body.status
+            applied["status"] = body.status
+
+    if body.rating is not None:
+        validate_rating(body.rating)
+        r = ensure_row()
+        if r.rating is None:
+            r.rating = body.rating
+            r.rated_at = datetime.utcnow()
+            applied["rating"] = body.rating
+            if body.review and not r.review:
+                r.review = body.review
+                applied["review"] = True
+
+    if body.percentage is not None:
+        pct = min(max(float(body.percentage), 0.0), 1.0)
+        r = ensure_row()
+        if r.progress_pct is None:
+            r.progress_pct = pct
+            applied["progress_pct"] = pct
+        existing_pos = (
+            db.query(TomeSyncPosition)
+            .filter(TomeSyncPosition.user_id == user.id, TomeSyncPosition.book_id == book_id)
+            .first()
+        )
+        if existing_pos is None:
+            db.add(TomeSyncPosition(
+                user_id=user.id, book_id=book_id,
+                progress=body.progress, percentage=pct,
+                device=body.device or "sweep",
+            ))
+            applied["position"] = True
+
+    db.commit()
+    if "rating" in applied:
+        hardcover_nudge()
+    return {"ok": True, "book_id": book_id, "applied": applied}
+
+
 @router.get("/tome-sync/series/{book_id}")
 def get_series_books(
     book_id: int,
@@ -1501,6 +1637,9 @@ local backoff_until        = 0    -- os.time() before which requests are skipped
 local last_session_init = {{ book_id = nil, at = 0 }}
 -- Once-per-process guard for the state prune (init runs per reader instance).
 local state_pruned = false
+-- Library-sweep latch: one sweep at a time per KOReader process.
+local sweep_running = false
+local SWEEP_EXTS = {{ epub = true, pdf = true, cbz = true, cbr = true, mobi = true, azw3 = true }}
 
 -- ── HTTP client ──────────────────────────────────────────────────────────────
 
@@ -1988,6 +2127,17 @@ function TomeSync:_pruneState()
     pruneById(self.annot_baseline)
     pruneById(self.rating_baseline)
     pruneById(self.repair_map)
+    -- Sweep ledger is keyed by file path directly.
+    local sweep = self.state:readSetting("tomesync_sweep")
+    if sweep and sweep.done then
+        for path in pairs(sweep.done) do
+            if lfs.attributes(path, "mode") ~= "file" then
+                sweep.done[path] = nil
+                changed = true
+            end
+        end
+        if changed then self.state:saveSetting("tomesync_sweep", sweep) end
+    end
     if changed then
         self.state:saveSetting("tomesync_book_map", self.book_map)
         self.state:saveSetting("tomesync_annot_baseline", self.annot_baseline)
@@ -3741,6 +3891,177 @@ function TomeSync:_downloadCurrentBookSeriesImpl(rest_only)
     self:_downloadSeriesBooks(data.series_name, data.books, min_index, data.book_type)
 end
 
+-- ── Library sweep: adopt closed books (build 34) ─────────────────────────────
+-- Walks the device library for books TomeSync has NEVER synced (pre-Tome
+-- history, other launchers, sideloads), resolves them by partial-MD5 in
+-- batches, and adopts each sidecar's status/rating/progress. The server fills
+-- gaps only, so re-sweeping is always safe. Resumable: every book is ack-gated
+-- into a ledger keyed by its sidecar's mtime — re-runs skip everything already
+-- taken unless the sidecar changed since.
+
+function TomeSync:_sweepLibrary()
+    if sweep_running then
+        UIManager:show(InfoMessage:new{{ text = "Library sweep already running.", timeout = 3 }})
+        return
+    end
+    whenConnected(function() self:_sweepLibraryImpl() end)
+end
+
+function TomeSync:_sweepLibraryImpl()
+    local base_dir = G_reader_settings:readSetting("home_dir")
+                  or G_reader_settings:readSetting("download_dir")
+                  or G_reader_settings:readSetting("lastdir")
+    if not base_dir then
+        UIManager:show(InfoMessage:new{{ text = "No home folder configured.", timeout = 4 }})
+        return
+    end
+    local DocSettings = require("docsettings")
+    local sweep = self.state:readSetting("tomesync_sweep") or {{}}
+    sweep.done = sweep.done or {{}}
+
+    -- Phase 1: walk — never-synced books with a sidecar whose mtime moved past
+    -- the ledger. Cheap: no file is opened or hashed here.
+    local candidates = {{}}
+    local function walk(dir, depth)
+        if depth > 10 then return end
+        local ok, iter, dirobj = pcall(lfs.dir, dir)
+        if not ok then return end
+        for entry in iter, dirobj do
+            if entry ~= "." and entry ~= ".." and entry:sub(1, 1) ~= "." then
+                local path = dir .. "/" .. entry
+                local mode = lfs.attributes(path, "mode")
+                if mode == "directory" then
+                    if not entry:match("%.sdr$") then walk(path, depth + 1) end
+                elseif mode == "file" then
+                    local ext = entry:match("%.([^.]+)$")
+                    if ext and SWEEP_EXTS[ext:lower()] and not self.book_map[path] then
+                        local sidecar = DocSettings:findSidecarFile(path)
+                        if sidecar then
+                            local smtime = lfs.attributes(sidecar, "modification") or 0
+                            if (sweep.done[path] or -1) < smtime then
+                                table.insert(candidates, {{ path = path, smtime = smtime }})
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    walk(base_dir, 0)
+
+    if #candidates == 0 then
+        UIManager:show(InfoMessage:new{{ text = "Library sweep: nothing new to adopt.", timeout = 4 }})
+        return
+    end
+
+    sweep_running = true
+    UIManager:show(Notification:new{{
+        text = string.format("TomeSync: sweeping %d closed book(s)…", #candidates),
+        timeout = 3,
+    }})
+
+    local stats = {{ matched = 0, adopted = 0, unmatched = 0, failed = 0 }}
+    local idx = 1
+    local CHUNK = 5
+
+    local function finish(aborted)
+        sweep_running = false
+        self:_saveState("tomesync_sweep", sweep)
+        UIManager:show(InfoMessage:new{{
+            text = string.format(
+                "Library sweep %s.\\n\\nMatched in Tome: %d\\nState adopted: %d\\nNot in Tome: %d\\nFailed: %d",
+                aborted and "stopped (server unreachable)" or "done",
+                stats.matched, stats.adopted, stats.unmatched, stats.failed),
+            timeout = 8,
+        }})
+    end
+
+    local function step()
+        if idx > #candidates then finish(false) return end
+        local batch = {{}}
+        while idx <= #candidates and #batch < CHUNK do
+            table.insert(batch, candidates[idx])
+            idx = idx + 1
+        end
+        -- Phase 2: hash + batch-resolve this chunk, then adopt each match.
+        local hashes, by_hash = {{}}, {{}}
+        for _, c in ipairs(batch) do
+            local md5 = util.partialMD5(c.path)
+            if md5 then
+                table.insert(hashes, md5)
+                by_hash[md5] = c
+            else
+                stats.failed = stats.failed + 1
+            end
+        end
+        local ok, resp, code = pcall(apiRequest, "POST", "/tome-sync/match-hashes",
+                                     {{ hashes = hashes }})
+        if not ok or type(resp) ~= "table" or type(resp.matches) ~= "table"
+                or (type(code) == "number" and code >= 300) then
+            -- Server gone mid-run: stop; the ledger keeps everything adopted so far.
+            finish(true)
+            return
+        end
+        for _, md5 in ipairs(hashes) do
+            local c = by_hash[md5]
+            local book_id = resp.matches[md5]
+            if type(book_id) == "number" then
+                stats.matched = stats.matched + 1
+                -- A sweep match is a real resolve: everything else (positions,
+                -- annotations, ratings) now works for this book too.
+                self.book_map[c.path] = book_id
+                if self:_adoptSidecar(book_id, c.path) then
+                    stats.adopted = stats.adopted + 1
+                    sweep.done[c.path] = c.smtime
+                else
+                    stats.failed = stats.failed + 1
+                end
+            else
+                stats.unmatched = stats.unmatched + 1
+                -- Ledger it anyway — no point re-hashing every run; a changed
+                -- sidecar (mtime) will retry it naturally.
+                sweep.done[c.path] = c.smtime
+            end
+        end
+        self:_saveState("tomesync_book_map", self.book_map)
+        self:_saveState("tomesync_sweep", sweep)
+        UIManager:scheduleIn(0.5, step)
+    end
+    step()
+end
+
+function TomeSync:_adoptSidecar(book_id, path)
+    -- Read the CLOSED book's sidecar (no document open) and push its state;
+    -- the server fills gaps only, so nothing here can clobber live sync state.
+    local DocSettings = require("docsettings")
+    local okd, ds = pcall(DocSettings.open, DocSettings, path)
+    if not okd or not ds then return false end
+    local summary = ds:readSetting("summary") or {{}}
+    local pct = tonumber(ds:readSetting("percent_finished"))
+    local xp = ds:readSetting("last_xpointer")
+    local status = nil
+    if summary.status == "complete" then
+        status = "read"
+    elseif summary.status == "reading" then
+        status = "reading"
+    end
+    -- "abandoned" has no Tome equivalent; the book's other state still adopts.
+    local body = {{
+        status = status,
+        rating = tonumber(summary.rating),
+        review = (type(summary.note) == "string" and summary.note ~= "") and summary.note or nil,
+        percentage = pct,
+        progress = (type(xp) == "string") and xp or nil,
+        device = deviceName(),
+    }}
+    if body.status == nil and body.rating == nil and body.percentage == nil then
+        -- Bare sidecar (layout settings only): nothing to adopt, count as done.
+        return true
+    end
+    local ok, _resp, code = pcall(apiRequest, "POST", "/tome-sync/sweep/" .. book_id, body)
+    return ok and type(code) == "number" and code < 300
+end
+
 -- ── Self-update ──────────────────────────────────────────────────────────────
 
 -- on_result(avail) where avail is a {{build, semver}} table if newer, false if
@@ -4108,6 +4429,14 @@ function TomeSync:_menuItems()
         callback = function()
             whenConnected(function() self:_syncReadingStats(true) end)
         end,
+    }})
+    table.insert(sub_items, {{
+        text      = "Sync closed books",
+        help_text = "Adopt status, rating and progress from books on this "
+                  .. "device that TomeSync has never synced (read before Tome, "
+                  .. "sideloaded, or opened under another launcher). Only fills "
+                  .. "what Tome doesn't already have.",
+        callback  = function() self:_sweepLibrary() end,
     }})
     -- Inbox: only shown when the server has Send-to-KOReader enabled (set by the
     -- launch poll). Badge shows the pending count.
