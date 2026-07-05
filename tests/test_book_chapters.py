@@ -138,6 +138,30 @@ class TestChapterTimes:
         out = compute_book_chapter_times(db, user_id=user.id, book_id=book.id)
         assert [c["seconds"] for c in out] == [90, 45]
         assert [c["title"] for c in out] == ["One", "Two"]
+        # When the chapter was read: pages 10 and 40 are 30s apart in _dwell's
+        # stamping (base + page), well under the 30-min gap → ONE sitting
+        # covering both; chapter Two has a single dwell.
+        assert out[0]["sittings"] == [{"start_ts": 1_700_000_010, "end_ts": 1_700_000_070}]
+        assert out[1]["sittings"] == [{"start_ts": 1_700_000_080, "end_ts": 1_700_000_125}]
+
+    def test_sittings_split_on_thirty_minute_gap(self, db, admin_user, make_book):
+        user, _ = admin_user
+        book = make_book(title="TwoSittings")
+        _chapter(db, book.id, 0, "One", 0.0, 1.0)
+        _chapter(db, book.id, 1, "Two", 1.0, 1.0)
+        base = 1_700_000_000
+        # _dwell stamps start_time + page. Two dwells ~5 minutes apart (one
+        # sitting), then one ~2 hours later (a second sitting).
+        _dwell(db, user.id, book.id, page=1, total=100, seconds=60, start_time=base - 1)      # ts base
+        _dwell(db, user.id, book.id, page=2, total=100, seconds=60, start_time=base + 298)    # ts base+300
+        _dwell(db, user.id, book.id, page=3, total=100, seconds=60, start_time=base + 7197)   # ts base+7200
+        db.commit()
+
+        out = compute_book_chapter_times(db, user_id=user.id, book_id=book.id)
+        s = out[0]["sittings"]
+        assert len(s) == 2
+        assert s[0]["start_ts"] == base and s[0]["end_ts"] == base + 360
+        assert s[1]["start_ts"] == base + 7200 and s[1]["end_ts"] == base + 7260
 
     def test_mixed_paginations_map_independently(self, db, admin_user, make_book):
         user, _ = admin_user

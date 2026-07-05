@@ -68,12 +68,49 @@ interface BookIntensity {
   reread_bins: number
 }
 
+interface ChapterSitting {
+  start_ts: number
+  end_ts: number
+}
+
 interface ChapterTime {
   idx: number
   title: string
   start_fraction: number
   end_fraction: number
   seconds: number
+  sittings: ChapterSitting[]
+}
+
+// When a chapter was actually read, honest about sittings:
+//   one sitting  → "Jun 2, 17:40 – 18:54"
+//   two or three → "Jun 2 17:40–18:10 · Jun 3 21:00–21:34"
+//   more         → "5 sittings · Jun 2 – Jun 8"
+function chapterReadSpan(c: ChapterTime): string {
+  const s = c.sittings
+  if (!s || s.length === 0) return ''
+  const day = (ts: number) =>
+    new Date(ts * 1000).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
+  const clock = (ts: number) =>
+    new Date(ts * 1000).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+  if (s.length === 1) {
+    return `read ${day(s[0].start_ts)}, ${clock(s[0].start_ts)} – ${clock(s[0].end_ts)}`
+  }
+  if (s.length <= 3) {
+    return 'read ' + s.map(x => `${day(x.start_ts)} ${clock(x.start_ts)}–${clock(x.end_ts)}`).join(' · ')
+  }
+  return `${s.length} sittings · ${day(s[0].start_ts)} – ${day(s[s.length - 1].end_ts)}`
+}
+
+// Short variant for the line-chart tooltip (dates only, no clock times).
+function chapterReadSpanShort(c: ChapterTime): string {
+  const s = c.sittings
+  if (!s || s.length === 0) return ''
+  const day = (ts: number) =>
+    new Date(ts * 1000).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
+  const a = day(s[0].start_ts)
+  const b = day(s[s.length - 1].end_ts)
+  return a === b ? `read ${a}` : `read ${a} – ${b}`
 }
 
 interface ReadingStatsResponse {
@@ -702,8 +739,10 @@ export function BookDetailPage() {
     api.get<ReadingStatsResponse>(`/books/${id}/reading-stats?tz_offset=${new Date().getTimezoneOffset()}`).then(setReadingStats).catch(() => {})
   const hasReadingData = readingStats && (readingStats.own.sessions > 0 || !!readingStats.intensity)
   const statsFull = readingStats ? (
-    <div className="mt-1 mb-5">
-      <div className="flex items-center gap-2 mb-2.5">
+    // mt-6 matches the Description/Details section rhythm — this block used to
+    // sit tight under the rating row (mt-1) before the description moved above it.
+    <div className="mt-6">
+      <div className="flex items-center gap-2 mb-3">
         <button
           type="button"
           onClick={() => setStatsOpen(o => { localStorage.setItem('tome_book_stats_open', o ? '0' : '1'); return !o })}
@@ -1424,46 +1463,112 @@ function IntensityBlock({ data }: { data: BookIntensity }) {
 // ── Time per chapter: page-stat dwell bucketed into the book's TOC boundaries ─────
 
 function ChapterTimesBlock({ chapters }: { chapters: ChapterTime[] }) {
-  const [expanded, setExpanded] = useState(false)
+  const [showDetails, setShowDetails] = useState(false)
   const max = Math.max(...chapters.map(c => c.seconds), 1)
   const total = chapters.reduce((s, c) => s + c.seconds, 0)
-  const COLLAPSED_COUNT = 10
-  const shown = expanded ? chapters : chapters.slice(0, COLLAPSED_COUNT)
   return (
     <div className="rounded-xl border border-border bg-card px-5 py-4">
       <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
         <span className="flex items-center gap-1.5">
           <p className="font-display text-sm text-foreground">Time per chapter</p>
-          <InfoHint text="Device reading time mapped into the book's chapters. A chapter with no bar hasn't been read on a synced device." />
+          <InfoHint text="Device reading time mapped into the book's chapters. Hover the line for a chapter's time; a flat stretch hasn't been read on a synced device." />
         </span>
         <p className="text-xs text-muted-foreground tabular-nums">{formatDuration(total)} across {chapters.length} chapters</p>
       </div>
-      <ul className="mt-3 space-y-1.5">
-        {shown.map(c => (
-          <li key={c.idx} className="flex items-center gap-3">
-            <span className="w-40 sm:w-56 shrink-0 truncate text-xs text-muted-foreground" title={c.title}>
-              {c.title}
-            </span>
-            <span className="flex-1 h-2 rounded bg-muted/60 overflow-hidden">
-              <span
-                className="block h-full rounded bg-primary/60"
-                style={{ width: c.seconds > 0 ? `${Math.max(Math.round((c.seconds / max) * 100), 3)}%` : '0%' }}
-              />
-            </span>
-            <span className="w-14 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
-              {c.seconds <= 0 ? '—' : c.seconds < 60 ? '<1m' : formatDuration(c.seconds)}
-            </span>
-          </li>
-        ))}
-      </ul>
-      {chapters.length > COLLAPSED_COUNT && (
-        <button
-          onClick={() => setExpanded(v => !v)}
-          className="mt-2.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
-        >
-          {expanded ? 'Show fewer' : `Show all ${chapters.length} chapters`}
-        </button>
+      <ChapterLineChart chapters={chapters} />
+      {showDetails && (
+        <ul className="mt-3 space-y-1.5">
+          {chapters.map(c => (
+            <li
+              key={c.idx}
+              className="flex items-center gap-3 -mx-2 px-2 py-0.5 rounded-md hover:bg-muted/50 transition-colors"
+              title={[c.title, chapterReadSpan(c)].filter(Boolean).join(' · ')}
+            >
+              <span className="w-40 sm:w-56 shrink-0 truncate text-xs text-muted-foreground">
+                {c.title}
+              </span>
+              <span className="flex-1 h-2 rounded bg-muted/60 overflow-hidden">
+                <span
+                  className="block h-full rounded bg-primary/60"
+                  style={{ width: c.seconds > 0 ? `${Math.max(Math.round((c.seconds / max) * 100), 3)}%` : '0%' }}
+                />
+              </span>
+              <span className="w-14 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
+                {c.seconds <= 0 ? '—' : c.seconds < 60 ? '<1m' : formatDuration(c.seconds)}
+              </span>
+            </li>
+          ))}
+        </ul>
       )}
+      <button
+        onClick={() => setShowDetails(v => !v)}
+        className="mt-2.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+      >
+        {showDetails ? 'Hide details' : 'Show details'}
+      </button>
+    </div>
+  )
+}
+
+// Line/area rendering of time-per-chapter: one series, so no legend — the
+// block title names it. Hover snaps to the nearest chapter and shows a styled
+// tooltip (name + time) with a marker dot; both are HTML overlays positioned
+// in percent, because the SVG stretches (preserveAspectRatio="none") and
+// would distort anything drawn inside it.
+function ChapterLineChart({ chapters }: { chapters: ChapterTime[] }) {
+  const W = 600, H = 80, PAD = 2
+  const n = chapters.length
+  const max = Math.max(...chapters.map(c => c.seconds), 1)
+  const [hover, setHover] = useState<number | null>(null)
+  const x = (i: number) => n === 1 ? W / 2 : PAD + (i / (n - 1)) * (W - 2 * PAD)
+  const y = (s: number) => H - PAD - (s / max) * (H - 2 * PAD)
+  const pts = chapters.map((c, i) => `${x(i).toFixed(1)},${y(c.seconds).toFixed(1)}`).join(' ')
+  const area = `${PAD},${H - PAD} ${pts} ${(W - PAD).toFixed(1)},${H - PAD}`
+
+  const onMove = (e: React.MouseEvent<HTMLDivElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect()
+    const frac = (e.clientX - rect.left) / rect.width
+    setHover(Math.min(Math.max(Math.round(frac * (n - 1)), 0), n - 1))
+  }
+  const h = hover !== null ? chapters[hover] : null
+  const hx = hover !== null ? (x(hover) / W) * 100 : 0
+  const hy = h ? (y(h.seconds) / H) * 100 : 0
+
+  return (
+    <div className="mt-3">
+      <div className="relative" onMouseMove={onMove} onMouseLeave={() => setHover(null)}>
+        <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-20 block" preserveAspectRatio="none" role="img" aria-label="Time per chapter, line view">
+          <line x1={PAD} y1={H - PAD} x2={W - PAD} y2={H - PAD} className="stroke-border/60" strokeWidth="1" />
+          <polygon points={area} className="fill-primary/15" />
+          <polyline points={pts} className="stroke-primary/70 fill-none" strokeWidth="2" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
+        </svg>
+        {h && (
+          <>
+            <span
+              className="pointer-events-none absolute w-2 h-2 rounded-full bg-primary ring-2 ring-card -translate-x-1/2 -translate-y-1/2"
+              style={{ left: `${hx}%`, top: `${hy}%` }}
+            />
+            <div
+              className="pointer-events-none absolute z-10 whitespace-nowrap rounded-md border border-border bg-popover px-2 py-1 text-xs shadow-md"
+              style={{
+                left: `${Math.min(Math.max(hx, 10), 90)}%`,
+                top: `${Math.max(hy - 8, 0)}%`,
+                transform: 'translate(-50%, -100%)',
+              }}
+            >
+              <span className="text-foreground">{h.title}</span>
+              <span className="text-muted-foreground tabular-nums">
+                {' · '}{h.seconds <= 0 ? 'not read' : h.seconds < 60 ? '<1m' : formatDuration(h.seconds)}
+                {chapterReadSpanShort(h) && ` · ${chapterReadSpanShort(h)}`}
+              </span>
+            </div>
+          </>
+        )}
+      </div>
+      <div className="flex justify-between text-xs text-muted-foreground/50 mt-1">
+        <span>ch. 1</span>
+        <span>ch. {n}</span>
+      </div>
     </div>
   )
 }

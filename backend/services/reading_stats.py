@@ -445,7 +445,8 @@ def compute_book_chapter_times(
         return None
 
     rows = (
-        db.query(PageStat.page, PageStat.total_pages, PageStat.duration_seconds)
+        db.query(PageStat.page, PageStat.total_pages, PageStat.duration_seconds,
+                 PageStat.start_time)
         .filter(
             PageStat.user_id == user_id,
             PageStat.book_id == book_id,
@@ -458,7 +459,8 @@ def compute_book_chapter_times(
 
     starts = [c.start_fraction for c in chapters]
     seconds = [0] * len(chapters)
-    for page, total_pages, dur in rows:
+    stamps: list[list[tuple[int, int]]] = [[] for _ in chapters]  # (ts, dur)
+    for page, total_pages, dur, start_time in rows:
         if not total_pages or total_pages <= 0:
             continue
         frac = (page - 0.5) / total_pages
@@ -468,10 +470,35 @@ def compute_book_chapter_times(
         i = bisect_right(starts, frac) - 1
         if i < 0:
             i = 0
-        seconds[i] += int(dur or 0)
+        d = int(dur or 0)
+        seconds[i] += d
+        ts = int(start_time or 0)
+        if ts:
+            stamps[i].append((ts, d))
 
     if not any(seconds):
         return None
+
+    # WHEN a chapter was read: cluster its dwells into sittings with the same
+    # 30-minute-gap rule the session clustering uses. A chapter read across two
+    # evenings must be two sittings — a naive min–max range would render as a
+    # 28-hour "session".
+    GAP = 1800
+
+    def sittings_of(items: list[tuple[int, int]]) -> list[dict]:
+        if not items:
+            return []
+        items.sort()
+        out: list[dict] = []
+        start, end = items[0][0], items[0][0] + items[0][1]
+        for ts, d in items[1:]:
+            if ts - end > GAP:
+                out.append({"start_ts": start, "end_ts": end})
+                start = ts
+            end = max(end, ts + d)
+        out.append({"start_ts": start, "end_ts": end})
+        return out
+
     return [
         {
             "idx": c.idx,
@@ -479,6 +506,7 @@ def compute_book_chapter_times(
             "start_fraction": c.start_fraction,
             "end_fraction": c.end_fraction,
             "seconds": seconds[i],
+            "sittings": sittings_of(stamps[i]),
         }
         for i, c in enumerate(chapters)
     ]
