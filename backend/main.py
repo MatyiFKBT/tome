@@ -47,6 +47,7 @@ from backend.models.user_device import UserDevice  # noqa: F401
 from backend.models.wish import Wish  # noqa: F401
 from backend.models.notification import Notification  # noqa: F401
 from backend.models.reading_goal import ReadingGoal  # noqa: F401
+from backend.models.book import BookChapter  # noqa: F401
 
 
 @asynccontextmanager
@@ -66,6 +67,11 @@ async def lifespan(app: FastAPI):
         # Add word_count — NULL for existing books until backfilled (Admin → Word Counts)
         if "word_count" not in cols:
             conn.execute(text("ALTER TABLE books ADD COLUMN word_count INTEGER"))
+            conn.commit()
+        # Intrinsic PDF/CBZ page count (EPUB stays NULL by design) — filled at
+        # ingest, backfilled by the same admin job as word counts.
+        if "page_count" not in cols:
+            conn.execute(text("ALTER TABLE books ADD COLUMN page_count INTEGER"))
             conn.commit()
         user_cols = {r[1] for r in conn.execute(text("PRAGMA table_info(users)")).fetchall()}
         if "role" not in user_cols:
@@ -437,6 +443,7 @@ async def _run_auto_import() -> None:
                 language=meta.get("language"),
                 year=meta.get("year"),
                 word_count=meta.get("word_count"),
+                page_count=meta.get("page_count"),
                 cover_path=cover_path,
                 content_hash=content_hash,
                 content_type=parsed.content_type,
@@ -446,6 +453,9 @@ async def _run_auto_import() -> None:
             )
             db.add(book)
             db.flush()
+
+            from backend.services.chapters import replace_book_chapters
+            replace_book_chapters(db, book.id, meta.get("_chapters"))
 
             db.add(BookFile(
                 book_id=book.id,

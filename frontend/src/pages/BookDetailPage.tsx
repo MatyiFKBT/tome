@@ -68,6 +68,14 @@ interface BookIntensity {
   reread_bins: number
 }
 
+interface ChapterTime {
+  idx: number
+  title: string
+  start_fraction: number
+  end_fraction: number
+  seconds: number
+}
+
 interface ReadingStatsResponse {
   own: BookReadingStats
   aggregate: {
@@ -76,6 +84,7 @@ interface ReadingStatsResponse {
     distinct_readers: number
   } | null
   intensity: BookIntensity | null
+  chapters: ChapterTime[] | null
 }
 
 async function downloadFile(book: BookDetail, f: BookFile) {
@@ -714,6 +723,9 @@ export function BookDetailPage() {
               />
             )}
             {readingStats.intensity && <IntensityBlock data={readingStats.intensity} />}
+            {readingStats.chapters && readingStats.chapters.length > 0 && (
+              <ChapterTimesBlock chapters={readingStats.chapters} />
+            )}
           </div>
         ) : (
           // No history yet — the manual-tracking entry point (paper / un-synced device).
@@ -1399,6 +1411,53 @@ function IntensityBlock({ data }: { data: BookIntensity }) {
         )}
         <span>end</span>
       </div>
+    </div>
+  )
+}
+
+// ── Time per chapter: page-stat dwell bucketed into the book's TOC boundaries ─────
+
+function ChapterTimesBlock({ chapters }: { chapters: ChapterTime[] }) {
+  const [expanded, setExpanded] = useState(false)
+  const max = Math.max(...chapters.map(c => c.seconds), 1)
+  const total = chapters.reduce((s, c) => s + c.seconds, 0)
+  const COLLAPSED_COUNT = 10
+  const shown = expanded ? chapters : chapters.slice(0, COLLAPSED_COUNT)
+  return (
+    <div className="rounded-xl border border-border bg-card px-5 py-4">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+        <span className="flex items-center gap-1.5">
+          <p className="font-display text-sm text-foreground">Time per chapter</p>
+          <InfoHint text="Device reading time mapped into the book's chapters. A chapter with no bar hasn't been read on a synced device." />
+        </span>
+        <p className="text-xs text-muted-foreground tabular-nums">{formatDuration(total)} across {chapters.length} chapters</p>
+      </div>
+      <ul className="mt-3 space-y-1.5">
+        {shown.map(c => (
+          <li key={c.idx} className="flex items-center gap-3">
+            <span className="w-40 sm:w-56 shrink-0 truncate text-xs text-muted-foreground" title={c.title}>
+              {c.title}
+            </span>
+            <span className="flex-1 h-2 rounded bg-muted/60 overflow-hidden">
+              <span
+                className="block h-full rounded bg-primary/60"
+                style={{ width: c.seconds > 0 ? `${Math.max(Math.round((c.seconds / max) * 100), 3)}%` : '0%' }}
+              />
+            </span>
+            <span className="w-14 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
+              {c.seconds <= 0 ? '—' : c.seconds < 60 ? '<1m' : formatDuration(c.seconds)}
+            </span>
+          </li>
+        ))}
+      </ul>
+      {chapters.length > COLLAPSED_COUNT && (
+        <button
+          onClick={() => setExpanded(v => !v)}
+          className="mt-2.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+        >
+          {expanded ? 'Show fewer' : `Show all ${chapters.length} chapters`}
+        </button>
+      )}
     </div>
   )
 }

@@ -293,6 +293,7 @@ def _create_book_entry(
         language=meta.get("language"),
         year=meta.get("year"),
         word_count=meta.get("word_count"),
+        page_count=meta.get("page_count"),
         cover_path=meta.get("cover_path"),
         content_hash=content_hash,
         status="active",
@@ -300,6 +301,9 @@ def _create_book_entry(
     )
     db.add(book)
     db.flush()
+
+    from backend.services.chapters import replace_book_chapters
+    replace_book_chapters(db, book.id, meta.get("_chapters"))
 
     if result is not None:
         result.added_ids.append(book.id)

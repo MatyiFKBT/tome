@@ -6,6 +6,7 @@ Used by:
 """
 from __future__ import annotations
 
+from bisect import bisect_right
 from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Optional
@@ -415,6 +416,73 @@ def compute_book_reading_stats(
 
 
 # ── Per-book reading intensity (imported KOReader page-stats) ─────────────────
+
+def compute_book_chapter_times(
+    db: Session,
+    *,
+    user_id: int,
+    book_id: int,
+) -> Optional[list[dict]]:
+    """Time spent per chapter for one book: KOReader page-stat dwell mapped
+    into the book's TOC chapter boundaries.
+
+    Chapters store device-independent fraction boundaries (see BookChapter);
+    each dwell row maps to a fraction via its own pagination
+    (``(page - 0.5) / total_pages``, mid-page so boundary pages land in the
+    chapter they mostly belong to). Returns None when the book has no chapter
+    map or the user has no page-stats for it — the caller hides the section.
+    """
+    from backend.models.book import BookChapter
+    from backend.models.ko_stats import PageStat
+
+    chapters = (
+        db.query(BookChapter)
+        .filter(BookChapter.book_id == book_id)
+        .order_by(BookChapter.idx.asc())
+        .all()
+    )
+    if not chapters:
+        return None
+
+    rows = (
+        db.query(PageStat.page, PageStat.total_pages, PageStat.duration_seconds)
+        .filter(
+            PageStat.user_id == user_id,
+            PageStat.book_id == book_id,
+            PageStat.total_pages > 0,
+        )
+        .all()
+    )
+    if not rows:
+        return None
+
+    starts = [c.start_fraction for c in chapters]
+    seconds = [0] * len(chapters)
+    for page, total_pages, dur in rows:
+        if not total_pages or total_pages <= 0:
+            continue
+        frac = (page - 0.5) / total_pages
+        frac = min(max(frac, 0.0), 0.999999)
+        # bisect into the chapter whose start is the last one ≤ frac. Dwell
+        # before the first chapter (cover/front matter) folds into chapter 0.
+        i = bisect_right(starts, frac) - 1
+        if i < 0:
+            i = 0
+        seconds[i] += int(dur or 0)
+
+    if not any(seconds):
+        return None
+    return [
+        {
+            "idx": c.idx,
+            "title": c.title,
+            "start_fraction": c.start_fraction,
+            "end_fraction": c.end_fraction,
+            "seconds": seconds[i],
+        }
+        for i, c in enumerate(chapters)
+    ]
+
 
 def compute_book_page_intensity(
     db: Session,

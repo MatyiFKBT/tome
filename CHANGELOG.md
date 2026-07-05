@@ -6,6 +6,20 @@ All notable changes to Tome are documented here. Format loosely follows
 
 ## [Unreleased]
 
+### Added
+- **Time per chapter.** Book pages now show where your reading time went
+  chapter by chapter: the book's table of contents is extracted at ingest into
+  device-independent chapter boundaries, and KOReader per-page reading data is
+  mapped into them — robust to font/margin changes, since every page record is
+  interpreted against its own pagination. Renders on the book detail page next
+  to the reading-intensity curve whenever both a chapter map and synced page
+  data exist. Existing libraries get chapter maps via the Admin → Word Counts
+  backfill, which now also extracts chapters (and intrinsic page counts, below)
+  in the same pass.
+- **Intrinsic page counts for fixed-layout books.** PDFs and comic archives now
+  store their real page count at ingest (EPUB deliberately doesn't — reflowable
+  pagination is not a property of the book). Backfilled by the same admin job.
+
 ## [1.8.0] — 2026-07-05 — "Spine"
 
 ### Added
