@@ -7,6 +7,16 @@ All notable changes to Tome are documented here. Format loosely follows
 ## [Unreleased]
 
 ### Added
+- **Sync closed books (KOReader plugin, build 34).** A new TomeSync menu
+  action walks the device for books the plugin has never synced — read before
+  Tome existed, sideloaded, or opened under another launcher — matches them
+  against your library by content hash, and adopts each one's status, rating
+  and reading position from its KOReader sidecar. Adoption only fills what
+  Tome doesn't already have: it can never overwrite live sync state or your
+  own curation. The sweep is resumable (interrupting it loses nothing) and
+  cheap to re-run — books are skipped until their sidecar actually changes.
+  Matched books also become fully synced from then on, positions, highlights
+  and all.
 - **Search your library from the device (KOReader plugin, build 33).** The
   series browser gains a "Search library…" entry: submit-based free-text search
   over title, author, and series, with your last searches one tap away. Results
