@@ -29,7 +29,7 @@ from backend.models.user_book_status import UserBookStatus
 from backend.models.tome_sync import Annotation, AnnotationTombstone, ApiKey, ReadingSession, TomeSyncPosition
 from backend.models.ko_stats import StatsImport
 from backend.models.send_queue import SendQueueItem
-from backend.services.book_progress import apply_progress_to_status
+from backend.services.book_progress import apply_progress_to_status, upsert_position
 from backend.services.hardcover_sync import nudge as hardcover_nudge
 
 router = APIRouter(tags=["tome-sync"])
@@ -83,6 +83,57 @@ def _get_position(db: Session, user_id: int, book_id: int) -> Optional[TomeSyncP
     )
 
 
+# ── Filename → book resolution helpers ────────────────────────────────────────
+# These back the heuristic fallbacks in resolve_book, which only fire for files
+# that never passed through Tome (no content-hash, no exact path). A wrong guess
+# there silently writes one book's progress and annotations onto another, so the
+# matching is deliberately strict: it would rather return 404 (device keeps
+# local-only tracking) than clobber the wrong book.
+
+# Titles/stems shorter than this may match only by exact equality — a bare
+# "It"/"Us"/"Go" substring otherwise swallows unrelated sideloaded filenames.
+_MIN_HEURISTIC_LEN = 4
+
+
+def _phrase_index(haystack: str, needle: str) -> int:
+    """Index of needle in haystack where it is not glued to an alphanumeric on
+    either side (a whole-phrase occurrence), or -1. Tolerant of punctuation in
+    needle, unlike a naive ``\\b`` regex."""
+    start = 0
+    n = len(needle)
+    while True:
+        pos = haystack.find(needle, start)
+        if pos == -1:
+            return -1
+        before = haystack[pos - 1] if pos > 0 else ""
+        after = haystack[pos + n] if pos + n < len(haystack) else ""
+        if not before.isalnum() and not after.isalnum():
+            return pos
+        start = pos + 1
+
+
+def _title_in_stem(title_l: str, stem_l: str) -> bool:
+    """Book title occurs as a whole phrase inside the filename stem. Short
+    titles must equal the stem exactly, so "It" can't match "The Italian Job"."""
+    if len(title_l) < _MIN_HEURISTIC_LEN:
+        return title_l == stem_l
+    return _phrase_index(stem_l, title_l) != -1
+
+
+def _stem_in_title(stem_l: str, title_l: str) -> bool:
+    """Filename stem is a word-boundaried fragment of the title (handles
+    truncated names). Minimum length guards against "1" matching "1984"."""
+    if len(stem_l) < _MIN_HEURISTIC_LEN:
+        return False
+    pos = title_l.find(stem_l)
+    while pos != -1:
+        before = title_l[pos - 1] if pos > 0 else ""
+        if not before.isalnum():  # stem begins at a word boundary
+            return True
+        pos = title_l.find(stem_l, pos + 1)
+    return False
+
+
 # ── Resolve endpoint ─────────────────────────────────────────────────────────
 
 @router.get("/tome-sync/resolve")
@@ -132,34 +183,36 @@ def resolve_book(
             return {"book_id": book.id}
 
     # Volume number, in any of the shapes the download paths emit:
-    #   "Vol. 12", "v01", or a separator-delimited token "Series - 02 - Title".
+    #   "Vol. 12", "Vol. 2.5", "v01", or a separator-delimited token
+    #   "Series - 02 - Title". The separator token is bounded to 1-3 digits so a
+    #   4-digit year ("Foo - 1984 - Bar") is not misread as volume 1984, and the
+    #   "Vol." form accepts a half-volume (2.5) instead of truncating to 2.
     vol_num = None
     vol_match = (
-        re.search(r'[Vv]ol\.?\s*(\d+)', stem)
+        re.search(r'[Vv]ol\.?\s*(\d+(?:\.\d+)?)', stem)
         or re.search(r'\bv(\d{1,3})\b', stem)
-        or re.search(r'[-—]\s*0*(\d+)\s*[-—]', stem)
+        or re.search(r'[-—]\s*(\d{1,3})\s*[-—]', stem)
     )
     if vol_match:
         vol_num = float(vol_match.group(1))
 
     all_active = db.query(Book).filter(Book.status == "active").all()
 
-    # 2. Forward match: the book's title appears inside the filename. This is the
-    #    strong signal — the download paths all put the title into the name.
-    candidates = [b for b in all_active if b.title and b.title.lower() in stem_l]
+    # 2. Forward match: the book's title appears as a whole phrase in the
+    #    filename (short titles must match exactly — see _title_in_stem).
+    candidates = [b for b in all_active if b.title and _title_in_stem(b.title.lower(), stem_l)]
 
-    # When the filename carries a volume number it is authoritative: it selects
-    # the right volume AND rejects any candidate whose series_index disagrees.
-    # This is what stops vol-2's filename (which contains vol-1's title when the
-    # series shares its name with its first book) from resolving to vol-1.
+    # When the filename carries a volume number it is authoritative: only a book
+    # at that exact index may resolve. An index-less (standalone) candidate must
+    # NOT win by substring — a numbered file does not belong to an unnumbered
+    # book — and two books at the same index are genuinely ambiguous.
     if vol_num is not None:
         exact = [b for b in candidates if b.series_index == vol_num]
         if len(exact) == 1:
             return {"book_id": exact[0].id}
-        candidates = [
-            b for b in candidates
-            if b.series_index is None or b.series_index == vol_num
-        ]
+        raise HTTPException(
+            status_code=404, detail="Ambiguous filename; could not resolve uniquely"
+        )
 
     if len(candidates) == 1:
         return {"book_id": candidates[0].id}
@@ -175,14 +228,12 @@ def resolve_book(
             status_code=404, detail="Ambiguous filename; could not resolve uniquely"
         )
 
-    # 3. Reverse fallback: the filename is a substring of exactly one title
-    #    (handles truncated/shortened names). Honour the volume here too.
-    reverse = [b for b in all_active if b.title and stem_l in b.title.lower()]
+    # 3. Reverse fallback: the stem is a word-boundaried fragment of exactly one
+    #    title (truncated names). Min length guards against "1" → "1984"; a
+    #    volume number, if present, still requires an exact index match.
+    reverse = [b for b in all_active if b.title and _stem_in_title(stem_l, b.title.lower())]
     if vol_num is not None:
-        reverse = [
-            b for b in reverse
-            if b.series_index is None or b.series_index == vol_num
-        ]
+        reverse = [b for b in reverse if b.series_index == vol_num]
     if len(reverse) == 1:
         return {"book_id": reverse[0].id}
 
@@ -234,21 +285,10 @@ def put_position(
     # Clamp percentage to 0-1 range
     pct = max(0.0, min(1.0, body.percentage))
 
-    pos = _get_position(db, user.id, book_id)
-    if pos:
-        pos.progress = body.progress
-        pos.percentage = pct
-        pos.device = body.device
-        pos.updated_at = datetime.utcnow()
-    else:
-        pos = TomeSyncPosition(
-            user_id=user.id,
-            book_id=book_id,
-            progress=body.progress,
-            percentage=pct,
-            device=body.device,
-        )
-        db.add(pos)
+    upsert_position(
+        db, user_id=user.id, book_id=book_id,
+        percentage=pct, progress=body.progress, device=body.device,
+    )
 
     # Keep UserBookStatus in sync via the shared sticky-completion rule.
     # Position sync tracks the device last-write-wins (monotonic=False) — a

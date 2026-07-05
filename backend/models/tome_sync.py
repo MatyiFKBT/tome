@@ -65,6 +65,12 @@ class ReadingSession(Base):
 class TomeSyncPosition(Base):
     """Latest reading position per user+book, updated on every push."""
     __tablename__ = "tome_sync_positions"
+    __table_args__ = (
+        # One position row per user+book. Two writers (device heartbeat, web
+        # autosave) both do read-modify-write; without this they could each
+        # INSERT a first-ever row and fork into duplicates that flap on read.
+        UniqueConstraint("user_id", "book_id", name="uq_tspos_user_book"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int] = mapped_column(
