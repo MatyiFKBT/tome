@@ -6,6 +6,7 @@ Used by:
 """
 from __future__ import annotations
 
+from bisect import bisect_right
 from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Optional
@@ -415,6 +416,101 @@ def compute_book_reading_stats(
 
 
 # ── Per-book reading intensity (imported KOReader page-stats) ─────────────────
+
+def compute_book_chapter_times(
+    db: Session,
+    *,
+    user_id: int,
+    book_id: int,
+) -> Optional[list[dict]]:
+    """Time spent per chapter for one book: KOReader page-stat dwell mapped
+    into the book's TOC chapter boundaries.
+
+    Chapters store device-independent fraction boundaries (see BookChapter);
+    each dwell row maps to a fraction via its own pagination
+    (``(page - 0.5) / total_pages``, mid-page so boundary pages land in the
+    chapter they mostly belong to). Returns None when the book has no chapter
+    map or the user has no page-stats for it — the caller hides the section.
+    """
+    from backend.models.book import BookChapter
+    from backend.models.ko_stats import PageStat
+
+    chapters = (
+        db.query(BookChapter)
+        .filter(BookChapter.book_id == book_id)
+        .order_by(BookChapter.idx.asc())
+        .all()
+    )
+    if not chapters:
+        return None
+
+    rows = (
+        db.query(PageStat.page, PageStat.total_pages, PageStat.duration_seconds,
+                 PageStat.start_time)
+        .filter(
+            PageStat.user_id == user_id,
+            PageStat.book_id == book_id,
+            PageStat.total_pages > 0,
+        )
+        .all()
+    )
+    if not rows:
+        return None
+
+    starts = [c.start_fraction for c in chapters]
+    seconds = [0] * len(chapters)
+    stamps: list[list[tuple[int, int]]] = [[] for _ in chapters]  # (ts, dur)
+    for page, total_pages, dur, start_time in rows:
+        if not total_pages or total_pages <= 0:
+            continue
+        frac = (page - 0.5) / total_pages
+        frac = min(max(frac, 0.0), 0.999999)
+        # bisect into the chapter whose start is the last one ≤ frac. Dwell
+        # before the first chapter (cover/front matter) folds into chapter 0.
+        i = bisect_right(starts, frac) - 1
+        if i < 0:
+            i = 0
+        d = int(dur or 0)
+        seconds[i] += d
+        ts = int(start_time or 0)
+        if ts:
+            stamps[i].append((ts, d))
+
+    if not any(seconds):
+        return None
+
+    # WHEN a chapter was read: cluster its dwells into sittings with the same
+    # 30-minute-gap rule the session clustering uses. A chapter read across two
+    # evenings must be two sittings — a naive min–max range would render as a
+    # 28-hour "session".
+    GAP = 1800
+
+    def sittings_of(items: list[tuple[int, int]]) -> list[dict]:
+        if not items:
+            return []
+        items.sort()
+        out: list[dict] = []
+        start, end = items[0][0], items[0][0] + items[0][1]
+        for ts, d in items[1:]:
+            if ts - end > GAP:
+                out.append({"start_ts": start, "end_ts": end})
+                start = ts
+            end = max(end, ts + d)
+        out.append({"start_ts": start, "end_ts": end})
+        return out
+
+    return [
+        {
+            "idx": c.idx,
+            "title": c.title,
+            "start_fraction": c.start_fraction,
+            "end_fraction": c.end_fraction,
+            "seconds": seconds[i],
+            "sittings": sittings_of(stamps[i]),
+        }
+        for i, c in enumerate(chapters)
+    ]
+
 
 def compute_book_page_intensity(
     db: Session,

@@ -29,6 +29,26 @@ All notable changes to Tome are documented here. Format loosely follows
   happen silently, backward jumps never — and the ask-dialog is deferred a
   moment after open so it can never swallow a "on book opening" profile the
   way the old layout-reset bug did.
+- **Highlights page polish.** The deferred cluster from the original
+  commonplace-book release: an **only-notes filter** (show just the highlights
+  carrying your own notes — composes with search and on-this-day), a real
+  **file export** (download all matching highlights as a Markdown file, next to
+  the existing copy-to-clipboard), **keyboard shortcuts** (`/` search, `Esc`
+  clear, `c` collapse all, `n` only-notes, `e` export — listed in the `?`
+  help), and a **shuffle button** on the Home tab's highlight spotlight that
+  re-rolls to a different quote.
+- **Time per chapter.** Book pages now show where your reading time went
+  chapter by chapter: the book's table of contents is extracted at ingest into
+  device-independent chapter boundaries, and KOReader per-page reading data is
+  mapped into them — robust to font/margin changes, since every page record is
+  interpreted against its own pagination. Renders on the book detail page next
+  to the reading-intensity curve whenever both a chapter map and synced page
+  data exist. Existing libraries get chapter maps via the Admin → Word Counts
+  backfill, which now also extracts chapters (and intrinsic page counts, below)
+  in the same pass.
+- **Intrinsic page counts for fixed-layout books.** PDFs and comic archives now
+  store their real page count at ingest (EPUB deliberately doesn't — reflowable
+  pagination is not a property of the book). Backfilled by the same admin job.
 
 ### Fixed
 - **A fast server clock can no longer silently swallow highlights (build 32).**
@@ -50,6 +70,22 @@ All notable changes to Tome are documented here. Format loosely follows
 - **The plugin's series list no longer runs one query per series.** Loading the
   series browser was an N+1 that scaled with the library; it's now a single
   query with the same response.
+- **The Highlights "copy all as Markdown" export never worked.** It requested
+  more highlights than the API's page cap allowed, got a 422, and failed
+  without any feedback. The cap is raised, the export stays under it, and a
+  failure now shows an error toast instead of silently doing nothing.
+- **Bindery no longer invents a series from the filename.** Prose ebooks named
+  `Title 5.epub` used to come out of review with their series set to their own
+  title (the bare-number manga-chapter heuristic misfiring on novels); the
+  real series name in `(Series Book N)` parentheticals — the common
+  Amazon/Calibre naming — was stripped as noise; and the metadata embedded in
+  the file itself (`calibre:series` etc.) was extracted but never reached the
+  review form. All three are fixed: the filename parser now understands
+  `(Series Book N)` / `(Series #N)` markers and the `NN. Title - Author (Year)`
+  layout (filling the author field too), bare trailing numbers on EPUB/PDF no
+  longer fabricate a series, and the review form pre-fills from embedded
+  metadata with the same "file beats filename" precedence auto-import has
+  always used.
 
 ## [1.8.0] — 2026-07-05 — "Spine"
 

@@ -28,6 +28,11 @@ class Book(Base):
     # ingest (or backfilled by the admin word-count job). NULL for PDF/CBZ or
     # not-yet-parsed books. Feeds words-read / true-WPM stats (Phase 4).
     word_count: Mapped[Optional[int]] = mapped_column(Integer)
+    # Intrinsic page count for PDF/CBZ/CBR only (fixed-layout formats). EPUB
+    # deliberately stays NULL — a reflowable page count is device/font-specific
+    # and must never be stored as a book property (KOReader page-stats carry
+    # their own total_pages per row for that).
+    page_count: Mapped[Optional[int]] = mapped_column(Integer)
     # Hardcover identity — book-level because a title's Hardcover book/edition is
     # user-independent. Matched lazily by the sync worker (ISBN first, strict
     # title+author search as fallback). match_method "none" + matched_at set =
@@ -105,3 +110,27 @@ class BookTag(Base):
     source: Mapped[Optional[str]] = mapped_column(String(32))  # "google_books", "open_library", "user"
 
     book: Mapped["Book"] = relationship("Book", back_populates="tags")
+
+
+class BookChapter(Base):
+    """One TOC chapter with device-independent boundaries.
+
+    Boundaries are stored as fraction-of-book (by word offset), NOT page
+    numbers — pages are device/pagination-specific. Per-page dwell (KOReader
+    page-stats, which carry their own total_pages) maps into these buckets at
+    query time: fraction = page/total_pages. Extracted at ingest from the EPUB
+    TOC (or backfilled by the admin word-count job); fixed-layout formats have
+    no chapter map.
+    """
+    __tablename__ = "book_chapters"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    book_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("books.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    idx: Mapped[int] = mapped_column(Integer, nullable=False)          # 0-based TOC order
+    title: Mapped[str] = mapped_column(String(512), nullable=False)
+    start_fraction: Mapped[float] = mapped_column(Float, nullable=False)  # 0..1
+    end_fraction: Mapped[float] = mapped_column(Float, nullable=False)    # 0..1
+
+    book: Mapped["Book"] = relationship("Book")
