@@ -6,7 +6,7 @@ Plugin download: Bearer JWT for /api/plugin/koreader.
 import io
 import logging
 import zipfile
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 from pathlib import Path
@@ -47,7 +47,16 @@ logger = logging.getLogger(__name__)
 # BUILD 31: half-star ratings — rating_baseline entries split into
 # {remote, device} so a Tome half-star rounded onto the whole-star sidecar is
 # never pushed back as a "local edit" (old {rating=...} entries migrate on read).
-TOMESYNC_PLUGIN_BUILD = 31
+# BUILD 32: hygiene batch — clock-offset guard (device_time on annotation syncs;
+# server-minted stamps shifted into the device frame; future-stamp clamps),
+# pull-conflict strategy settings (forward/backward × prompt/silent/never), and
+# a dedicated tomesync_state.lua for the data tables (migrated out of
+# G_reader_settings, pruned for books no longer on disk).
+# BUILD 33: catalog batch — device search (submit-based + recent searches),
+# author browse axis, read-status write-back (hold a book row); the shared
+# _bookListMenu drill-down shows per-book status markers. Server side: series
+# list N+1 fixed, /tome-sync/{authors,author-books,search} + PUT status.
+TOMESYNC_PLUGIN_BUILD = 33
 TOMESYNC_PLUGIN_SEMVER = "1.8.0"
 TOMESYNC_PLUGIN_VERSION = str(TOMESYNC_PLUGIN_BUILD)
 
@@ -538,6 +547,10 @@ class DeletedAnchor(PydanticBaseModel):
 class SyncAnnotationsRequest(PydanticBaseModel):
     upserts: list[AnnotationItem] = []
     deletes: list[DeletedAnchor] = []
+    # Device wall-clock at request time ("%Y-%m-%d %H:%M:%S"). Lets the server
+    # compute this device's clock offset and shift server-minted LWW stamps into
+    # the device's frame — see _clock_offset_seconds.
+    device_time: Optional[str] = None
 
     # KOReader's Lua rapidjson encodes an empty table as a JSON object ({}), not an
     # array. Coerce that back to an empty list so an empty upserts/deletes is valid.
@@ -547,7 +560,49 @@ class SyncAnnotationsRequest(PydanticBaseModel):
         return [] if v in (None, {}) else v
 
 
-def _serialize_annotation(a: Annotation) -> dict:
+# ── Clock-offset guard ────────────────────────────────────────────────────────
+# Annotation LWW stamps are plain wall-clock strings compared lexicographically.
+# Stamps a DEVICE minted are in that device's frame (cross-device skew is a
+# documented, accepted edge). Stamps the SERVER minted (web create/edit/delete)
+# are in the server's frame — and a server clock ahead of a device makes those
+# stamps land in the device's *future*, silently outranking every later local
+# edit until the device clock catches up. Fix: the device stamps its wall-clock
+# on sync requests; the server shifts every server-minted stamp into the
+# device's frame, both in comparisons and in the response it returns.
+
+_KO_DT_FMT = "%Y-%m-%d %H:%M:%S"
+# Below this, treat the clocks as synchronized: request latency and second
+# truncation produce small spurious offsets, and shifting by them would churn
+# stamps for correctly-configured setups.
+_CLOCK_OFFSET_TOLERANCE_S = 120
+
+
+def _clock_offset_seconds(device_time: Optional[str]) -> int:
+    """Seconds the server clock is AHEAD of the device clock (0 = in sync)."""
+    if not device_time:
+        return 0
+    try:
+        dev = datetime.strptime(device_time.strip()[:19], _KO_DT_FMT)
+    except ValueError:
+        return 0
+    offset = round((datetime.now() - dev).total_seconds())
+    return offset if abs(offset) >= _CLOCK_OFFSET_TOLERANCE_S else 0
+
+
+def _shift_ko_dt(stamp: Optional[str], seconds: int) -> Optional[str]:
+    """Shift a KOReader wall-clock string by N seconds; unparseable → unchanged."""
+    if not stamp or not seconds:
+        return stamp
+    try:
+        base = datetime.strptime(stamp.strip()[:19], _KO_DT_FMT)
+    except ValueError:
+        return stamp
+    return (base + timedelta(seconds=seconds)).strftime(_KO_DT_FMT)
+
+
+def _serialize_annotation(a: Annotation, offset: int = 0) -> dict:
+    # Server-minted stamps travel to the device in the DEVICE's clock frame.
+    shift = -offset if a.server_minted else 0
     return {
         "id": a.id,
         "anchor": a.anchor,
@@ -556,8 +611,8 @@ def _serialize_annotation(a: Annotation) -> dict:
         "note": a.note,
         "chapter": a.chapter,
         "color": a.color,
-        "datetime": a.koreader_datetime,
-        "datetime_updated": a.koreader_datetime_updated,
+        "datetime": _shift_ko_dt(a.koreader_datetime, shift),
+        "datetime_updated": _shift_ko_dt(a.koreader_datetime_updated, shift),
         "updated_at": a.updated_at.isoformat() + "Z",
     }
 
@@ -579,15 +634,20 @@ def _annotation_state(db: Session, user_id: int, book_id: int):
     return alive, tombs
 
 
-def _annotation_response(db: Session, user_id: int, book_id: int, **extra) -> dict:
+def _annotation_response(db: Session, user_id: int, book_id: int, offset: int = 0, **extra) -> dict:
     alive, tombs = _annotation_state(db, user_id, book_id)
     rows = sorted(alive.values(), key=lambda a: (a.koreader_datetime or "", a.id))
     return {
         "book_id": book_id,
-        "annotations": [_serialize_annotation(a) for a in rows],
+        "annotations": [_serialize_annotation(a, offset) for a in rows],
         "tombstones": [
-            {"anchor": t.anchor, "deleted_at": t.client_deleted_at} for t in tombs.values()
+            {
+                "anchor": t.anchor,
+                "deleted_at": _shift_ko_dt(t.client_deleted_at, -offset if t.server_minted else 0),
+            }
+            for t in tombs.values()
         ],
+        "server_time": datetime.now().strftime(_KO_DT_FMT),
         **extra,
     }
 
@@ -612,19 +672,27 @@ def sync_annotations(
     alive, tombs = _annotation_state(db, user.id, book_id)
     created = updated = deleted = skipped = 0
 
+    # Server clock minus device clock; server-minted stamps are compared (and
+    # returned) in the device's frame so a fast server clock can't make web
+    # actions permanently outrank the device's next local edit.
+    offset = _clock_offset_seconds(body.device_time)
+
+    def in_device_frame(stamp: Optional[str], minted: bool) -> str:
+        return _shift_ko_dt(stamp, -offset if minted else 0) or ""
+
     for item in body.upserts:
         if not item.anchor:
             continue
         tomb = tombs.get(item.anchor)
         # A re-add only wins over a delete if it's strictly newer than the delete.
-        if tomb and item.mtime <= (tomb.client_deleted_at or ""):
+        if tomb and item.mtime <= in_device_frame(tomb.client_deleted_at, tomb.server_minted):
             skipped += 1
             continue
         if tomb:
             db.delete(tomb); tombs.pop(item.anchor, None)
         row = alive.get(item.anchor)
         if row:
-            if item.mtime >= row.effective_mtime:           # newer edit wins
+            if item.mtime >= in_device_frame(row.effective_mtime, row.server_minted):  # newer edit wins
                 row.anchor_end = item.anchor_end or row.anchor_end
                 row.highlighted_text = item.highlighted_text
                 row.note = item.note
@@ -632,6 +700,7 @@ def sync_annotations(
                 row.color = item.color
                 row.koreader_datetime = item.datetime or row.koreader_datetime
                 row.koreader_datetime_updated = item.mtime or row.koreader_datetime_updated
+                row.server_minted = False   # stamp is now device-authored
                 updated += 1
             else:
                 skipped += 1
@@ -660,7 +729,7 @@ def sync_annotations(
             continue
         row = alive.get(d.anchor)
         # If a live edit is newer than this delete, the edit wins — keep it.
-        if row and row.effective_mtime > (d.datetime or ""):
+        if row and in_device_frame(row.effective_mtime, row.server_minted) > (d.datetime or ""):
             skipped += 1
             continue
         if row:
@@ -668,8 +737,9 @@ def sync_annotations(
             deleted += 1
         tomb = tombs.get(d.anchor)
         if tomb:
-            if (d.datetime or "") > (tomb.client_deleted_at or ""):
+            if (d.datetime or "") > in_device_frame(tomb.client_deleted_at, tomb.server_minted):
                 tomb.client_deleted_at = d.datetime
+                tomb.server_minted = False   # stamp is now device-authored
         else:
             db.add(AnnotationTombstone(
                 user_id=user.id, book_id=book_id, anchor=d.anchor,
@@ -678,7 +748,7 @@ def sync_annotations(
 
     db.commit()
     return _annotation_response(
-        db, user.id, book_id,
+        db, user.id, book_id, offset=offset,
         applied={"created": created, "updated": updated, "deleted": deleted, "skipped": skipped},
     )
 
@@ -686,15 +756,50 @@ def sync_annotations(
 @router.get("/tome-sync/annotations/{book_id}")
 def get_annotations_plugin(
     book_id: int,
+    device_time: Optional[str] = None,
     db: Session = Depends(get_db),
     user: User = Depends(_get_api_key_user),
 ):
     """Full annotation state (alive + tombstones) for this user+book — what the
     plugin pulls and merges on book open."""
-    return _annotation_response(db, user.id, book_id)
+    return _annotation_response(db, user.id, book_id, offset=_clock_offset_seconds(device_time))
 
 
 # ── Series endpoints (API-key-authed, for the plugin) ────────────────────────
+
+def _status_map(db: Session, user_id: int, book_ids: list[int]) -> dict[int, str]:
+    """book_id -> reading status for this user, one query."""
+    if not book_ids:
+        return {}
+    rows = (
+        db.query(UserBookStatus.book_id, UserBookStatus.status)
+        .filter(UserBookStatus.user_id == user_id, UserBookStatus.book_id.in_(book_ids))
+        .all()
+    )
+    return {bid: status for bid, status in rows if status}
+
+
+def _book_entry(b: Book, status_map: dict[int, str]) -> dict:
+    """The book shape the plugin's volume-list menus consume. `series` and
+    `status` are additive (build 33+); older plugins ignore them."""
+    entry = {
+        "id": b.id,
+        "title": b.title,
+        "series_index": b.series_index,
+        "author": b.author,
+        "book_type": b.book_type.slug if b.book_type else None,
+        "status": status_map.get(b.id, "unread"),
+        "files": [
+            {"id": f.id, "format": f.format, "file_size": f.file_size}
+            for f in b.files
+        ],
+    }
+    # Only include series when real — JSON null crashes the KOReader menus
+    # (rapidjson decodes it to a truthy userdata sentinel).
+    if b.series:
+        entry["series"] = b.series
+    return entry
+
 
 @router.get("/tome-sync/series")
 def list_series(
@@ -705,57 +810,170 @@ def list_series(
     # Only count/expose books this user is allowed to see. book_visibility_filter
     # uses correlated EXISTS subqueries (no joins), so it doesn't duplicate rows
     # under the group_by, and returns True (no-op) for admins.
+    #
+    # One query for everything: ordered by (series, series_index, title), the
+    # first row seen per series IS its first book — the old per-series
+    # first_book query was an N+1 that scaled with the library.
     visibility = book_visibility_filter(db, user)
     rows = (
-        db.query(Book.series, func.count(Book.id).label("book_count"))
+        db.query(Book.series, Book.id, Book.author)
         .filter(Book.status == "active", Book.series.isnot(None), visibility)
-        .group_by(Book.series)
-        .order_by(Book.series)
+        .order_by(Book.series.asc(),
+                  Book.series_index.asc().nullslast(), Book.title.asc())
         .all()
     )
 
     result = []
-    for series_name, book_count in rows:
-        first_book = (
-            db.query(Book)
-            .filter(Book.status == "active", Book.series == series_name, visibility)
-            .order_by(Book.series_index.asc().nullslast(), Book.title.asc())
-            .first()
-        )
-        entry = {
-            "name": series_name,
-            "book_count": book_count,
-            "first_book_id": first_book.id if first_book else None,
-        }
-        # Only include author when it's a real string. Emitting JSON null here
-        # crashes the KOReader series browser, because rapidjson decodes null to
-        # a (truthy) userdata sentinel that the plugin then tries to concatenate.
-        if first_book and first_book.author:
-            entry["author"] = first_book.author
-        result.append(entry)
+    by_name: dict[str, dict] = {}
+    for series_name, book_id, author in rows:
+        entry = by_name.get(series_name)
+        if entry is None:
+            entry = {"name": series_name, "book_count": 0, "first_book_id": book_id}
+            # Only include author when it's a real string. Emitting JSON null here
+            # crashes the KOReader series browser, because rapidjson decodes null to
+            # a (truthy) userdata sentinel that the plugin then tries to concatenate.
+            if author:
+                entry["author"] = author
+            by_name[series_name] = entry
+            result.append(entry)
+        entry["book_count"] += 1
 
     # Append the unserialized bucket last, mirroring backend/api/books.py, so the
     # plugin's series browser exposes a single "No Series" entry through which
     # standalone books can be browsed and downloaded.
-    unserialized_count = (
-        db.query(func.count(Book.id))
+    unserialized = (
+        db.query(Book.id)
         .filter(Book.status == "active", Book.series.is_(None), visibility)
-        .scalar()
+        .order_by(Book.id)
+        .all()
     )
-    if unserialized_count:
-        first_unserialized = (
-            db.query(Book)
-            .filter(Book.status == "active", Book.series.is_(None), visibility)
-            .order_by(Book.id)
-            .first()
-        )
+    if unserialized:
         result.append({
             "name": "__unserialized__",
-            "book_count": unserialized_count,
-            "first_book_id": first_unserialized.id if first_unserialized else None,
+            "book_count": len(unserialized),
+            "first_book_id": unserialized[0][0],
         })
 
     return result
+
+
+@router.get("/tome-sync/authors")
+def list_authors(
+    db: Session = Depends(get_db),
+    user: User = Depends(_get_api_key_user),
+):
+    """List authors for the plugin's author browse axis — the natural way into
+    standalone books, which the series browser lumps into one No Series bucket."""
+    visibility = book_visibility_filter(db, user)
+    rows = (
+        db.query(Book.author, func.count(Book.id))
+        .filter(Book.status == "active", Book.author.isnot(None), Book.author != "", visibility)
+        .group_by(Book.author)
+        .order_by(Book.author.asc())
+        .all()
+    )
+    result = [{"name": name, "book_count": count} for name, count in rows]
+    unknown = (
+        db.query(func.count(Book.id))
+        .filter(Book.status == "active",
+                (Book.author.is_(None)) | (Book.author == ""), visibility)
+        .scalar()
+    )
+    if unknown:
+        result.append({"name": "__unknown__", "book_count": unknown})
+    return result
+
+
+@router.get("/tome-sync/author-books")
+def get_author_books(
+    author: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(_get_api_key_user),
+):
+    """All of one author's visible books, shaped like a series volume list so
+    the plugin reuses the same drill-down menu. Query param (not a path
+    segment): author names contain slashes, dots, and everything else."""
+    visibility = book_visibility_filter(db, user)
+    if author == "__unknown__":
+        author_filter = (Book.author.is_(None)) | (Book.author == "")
+    else:
+        author_filter = Book.author == author
+    books = (
+        db.query(Book)
+        .options(joinedload(Book.files), joinedload(Book.book_type))
+        .filter(Book.status == "active", author_filter, visibility)
+        .order_by(Book.series.asc().nullslast(),
+                  Book.series_index.asc().nullslast(), Book.title.asc())
+        .all()
+    )
+    smap = _status_map(db, user.id, [b.id for b in books])
+    return {"author": author, "books": [_book_entry(b, smap) for b in books]}
+
+
+@router.get("/tome-sync/search")
+def search_books(
+    q: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(_get_api_key_user),
+):
+    """Free-text search over title/author/series for the plugin (LIKE terms,
+    all must match). Same book shape as the series drill-down."""
+    terms = [t for t in q.strip().split() if t]
+    if not terms:
+        return {"query": q, "total": 0, "books": []}
+    visibility = book_visibility_filter(db, user)
+    query = (
+        db.query(Book)
+        .options(joinedload(Book.files), joinedload(Book.book_type))
+        .filter(Book.status == "active", visibility)
+    )
+    for t in terms:
+        like = f"%{t}%"
+        query = query.filter(
+            Book.title.ilike(like) | Book.author.ilike(like) | Book.series.ilike(like)
+        )
+    total = query.count()
+    books = (
+        query.order_by(Book.series.asc().nullslast(),
+                       Book.series_index.asc().nullslast(), Book.title.asc())
+        .limit(50)
+        .all()
+    )
+    smap = _status_map(db, user.id, [b.id for b in books])
+    return {"query": q, "total": total, "books": [_book_entry(b, smap) for b in books]}
+
+
+class StatusUpdate(PydanticBaseModel):
+    status: str
+
+
+@router.put("/tome-sync/status/{book_id}")
+def put_reading_status(
+    book_id: int,
+    body: StatusUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(_get_api_key_user),
+):
+    """Set unread/reading/read from the device's volume list (write-back).
+
+    A deliberate user action, so it writes status directly — unlike telemetry
+    (position/stats), which only ever *suggests* status via the sticky rule."""
+    if body.status not in ("unread", "reading", "read"):
+        raise HTTPException(status_code=422, detail="status must be unread|reading|read")
+    book = db.get(Book, book_id)
+    if not book or book.status != "active" or not user_can_see_book(db, user, book):
+        raise HTTPException(status_code=404, detail="Book not found")
+    row = (
+        db.query(UserBookStatus)
+        .filter(UserBookStatus.user_id == user.id, UserBookStatus.book_id == book_id)
+        .first()
+    )
+    if row is None:
+        row = UserBookStatus(user_id=user.id, book_id=book_id)
+        db.add(row)
+    row.status = body.status
+    db.commit()
+    return {"ok": True, "book_id": book_id, "status": body.status}
 
 
 @router.get("/tome-sync/series/{book_id}")
@@ -793,23 +1011,11 @@ def get_series_books(
     # below, which newer plugins prefer when filing downloads.
     book_type_slug = books[0].book_type.slug if books and books[0].book_type else "book"
 
+    smap = _status_map(db, user.id, [b.id for b in books])
     return {
         "series_name": series_name,
         "book_type": book_type_slug,
-        "books": [
-            {
-                "id": b.id,
-                "title": b.title,
-                "series_index": b.series_index,
-                "author": b.author,
-                "book_type": b.book_type.slug if b.book_type else None,
-                "files": [
-                    {"id": f.id, "format": f.format, "file_size": f.file_size}
-                    for f in b.files
-                ],
-            }
-            for b in books
-        ],
+        "books": [_book_entry(b, smap) for b in books],
     }
 
 
@@ -1243,6 +1449,9 @@ local ConfirmBox       = require("ui/widget/confirmbox")
 local socketutil       = require("socketutil")
 local Dispatcher       = require("dispatcher")
 local Event            = require("ui/event")
+local LuaSettings      = require("luasettings")
+local DataStorage      = require("datastorage")
+local ButtonDialog     = require("ui/widget/buttondialog")
 
 -- ── Register in wrench menu (tools tab, after calibre) ──────────────────────
 -- Runs once per KOReader process via require() caching.
@@ -1290,6 +1499,8 @@ local backoff_until        = 0    -- os.time() before which requests are skipped
 -- ReaderReady event reaches more than one live TomeSync instance for the same
 -- open. Cleared in onCloseDocument so an immediate reopen still inits.
 local last_session_init = {{ book_id = nil, at = 0 }}
+-- Once-per-process guard for the state prune (init runs per reader instance).
+local state_pruned = false
 
 -- ── HTTP client ──────────────────────────────────────────────────────────────
 
@@ -1620,8 +1831,15 @@ function TomeSync:init()
     self.progress_start = nil
     self.last_progress  = nil
     self.enabled        = true
-    self.book_map       = G_reader_settings:readSetting("tomesync_book_map") or {{}}
-    self.pending_sessions = G_reader_settings:readSetting("tomesync_pending_sessions") or {{}}
+    -- Dedicated state file: the plugin's data tables live in their own
+    -- LuaSettings file, NOT in G_reader_settings — KOReader parses the global
+    -- settings file at every boot, and these tables grow with the library.
+    -- (tomesync_update stays global: the frozen shim reads it and is never
+    -- replaced by self-update.)
+    self.state = LuaSettings:open(DataStorage:getSettingsDir() .. "/tomesync_state.lua")
+    self:_migrateState()
+    self.book_map       = self.state:readSetting("tomesync_book_map") or {{}}
+    self.pending_sessions = self.state:readSetting("tomesync_pending_sessions") or {{}}
     -- Send-to-KOReader inbox (beta): enabled only if the server reports the
     -- feature; count drives the menu badge. Populated by the launch poll below.
     self.inbox_enabled  = false
@@ -1629,28 +1847,29 @@ function TomeSync:init()
     self.inbox_items    = {{}}
     -- Web-adoption ledger: real_anchor -> provisional "web:" anchor, persisted so a
     -- failed push retries next sync (baseline alone would swallow the adoption).
-    self.adopt_pending = G_reader_settings:readSetting("tomesync_adopt_pending") or {{}}
+    self.adopt_pending = self.state:readSetting("tomesync_adopt_pending") or {{}}
     -- "<book_id>|<local pos0>" -> {{ anchor, anchor_end }} of the SERVER
     -- identity for foreign highlights that had to be re-anchored on this copy
     -- (see _applyForeign). Keys are book-scoped: xPointers are only unique
     -- WITHIN a book, and structurally common positions (p[1]/text().0) would
     -- otherwise collide across books and mistranslate pushes. Persisted so
     -- repairs survive restarts.
-    self.repair_map = G_reader_settings:readSetting("tomesync_repair_map") or {{}}
+    self.repair_map = self.state:readSetting("tomesync_repair_map") or {{}}
     self._heartbeat_armed = false
     self._heartbeat_task = function() self:_heartbeatNow() end
     -- Per-book annotation sync baseline: book_id -> {{ anchor -> mtime }} as of last
     -- sync. Lets a diff tell "I deleted this" from "this is new from another device".
-    self.annot_baseline = G_reader_settings:readSetting("tomesync_annot_baseline") or {{}}
+    self.annot_baseline = self.state:readSetting("tomesync_annot_baseline") or {{}}
     -- Per-book rating sync baseline: book_id (string) -> {{ rating=, review= }} as of
     -- the last reconcile. Lets a diff tell which side (device or Tome) changed.
-    self.rating_baseline = G_reader_settings:readSetting("tomesync_rating_baseline") or {{}}
+    self.rating_baseline = self.state:readSetting("tomesync_rating_baseline") or {{}}
     -- Ratings set offline (or lost to a server error) that never reached Tome.
     -- Keyed by book_id (string) so re-rating the same book before a flush keeps
     -- only the latest value. Flushed on resume / Sync now / close like sessions:
     -- the per-book open/close push alone misses a book you rate and never reopen
     -- (e.g. a finished book), so the rating would otherwise sit unsent forever.
-    self.pending_ratings = G_reader_settings:readSetting("tomesync_pending_ratings") or {{}}
+    self.pending_ratings = self.state:readSetting("tomesync_pending_ratings") or {{}}
+    self:_pruneState()
     self:onDispatcherRegisterActions()
     self.ui.menu:registerToMainMenu(self)
     logger.info("TomeSync: init complete, menu registered,",
@@ -1684,6 +1903,98 @@ function TomeSync:init()
     -- the entire KOReader history (chunked + resumable); later runs only new rows.
     if G_reader_settings:isTrue("tomesync_auto_sync_stats") then
         UIManager:scheduleIn(12, function() pcall(function() self:_syncReadingStats(false) end) end)
+    end
+end
+
+-- The data tables that live in the dedicated state file (tomesync_update and
+-- the boolean preferences stay in G_reader_settings — the frozen shim reads
+-- the former, and the latter are what user-settings files are for).
+local STATE_KEYS = {{
+    "tomesync_book_map", "tomesync_pending_sessions", "tomesync_adopt_pending",
+    "tomesync_repair_map", "tomesync_annot_baseline", "tomesync_rating_baseline",
+    "tomesync_pending_ratings",
+}}
+
+function TomeSync:_saveState(key, value)
+    self.state:saveSetting(key, value)
+    -- G_reader_settings flushed on app close; our file must flush itself. Save
+    -- sites are already at meaningful boundaries (sync done, queue changed), so
+    -- write-through is the right durability trade for a file this small.
+    self.state:flush()
+end
+
+function TomeSync:_migrateState()
+    -- One-time move of the data tables out of G_reader_settings. Crash-safe
+    -- order: write + flush the new file FIRST, delete the old keys after — a
+    -- crash in between leaves a harmless duplicate, and the marker branch
+    -- below re-deletes leftovers on the next boot.
+    if self.state:readSetting("migrated_from_global") then
+        local leftover = false
+        for _, k in ipairs(STATE_KEYS) do
+            if G_reader_settings:has(k) then
+                G_reader_settings:delSetting(k)
+                leftover = true
+            end
+        end
+        if leftover then G_reader_settings:flush() end
+        return
+    end
+    local found = false
+    for _, k in ipairs(STATE_KEYS) do
+        local v = G_reader_settings:readSetting(k)
+        if v ~= nil then
+            self.state:saveSetting(k, v)
+            found = true
+        end
+    end
+    self.state:saveSetting("migrated_from_global", true)
+    self.state:flush()
+    for _, k in ipairs(STATE_KEYS) do G_reader_settings:delSetting(k) end
+    G_reader_settings:flush()
+    if found then
+        logger.info("TomeSync: migrated plugin state to tomesync_state.lua")
+    end
+end
+
+function TomeSync:_pruneState()
+    -- Drop per-book state whose file is gone so the state file can't grow
+    -- unboundedly. Queues (pending_sessions/pending_ratings) are never pruned —
+    -- they are owed to the server regardless of the local file's fate. Baseline
+    -- loss is delete-safe by construction: deletes are only ever pushed FROM
+    -- baseline entries, so a wrongly-pruned baseline can only cause a harmless
+    -- re-upsert echo, never a delete.
+    if state_pruned then return end
+    state_pruned = true
+    local changed = false
+    local ids = {{}}
+    for path, id in pairs(self.book_map) do
+        if lfs.attributes(path, "mode") == "file" then
+            ids[tostring(id)] = true
+        else
+            self.book_map[path] = nil
+            changed = true
+        end
+    end
+    local function pruneById(tbl)
+        for key in pairs(tbl) do
+            -- repair_map keys are "<book_id>|<anchor>"; baselines use "<book_id>"
+            local id = key:match("^(%d+)|") or key
+            if not ids[id] then
+                tbl[key] = nil
+                changed = true
+            end
+        end
+    end
+    pruneById(self.annot_baseline)
+    pruneById(self.rating_baseline)
+    pruneById(self.repair_map)
+    if changed then
+        self.state:saveSetting("tomesync_book_map", self.book_map)
+        self.state:saveSetting("tomesync_annot_baseline", self.annot_baseline)
+        self.state:saveSetting("tomesync_rating_baseline", self.rating_baseline)
+        self.state:saveSetting("tomesync_repair_map", self.repair_map)
+        self.state:flush()
+        logger.info("TomeSync: pruned state for books no longer on disk")
     end
 end
 
@@ -1850,7 +2161,7 @@ function TomeSync:onSuspend()
             while #self.pending_sessions > 50 do
                 table.remove(self.pending_sessions, 1)
             end
-            G_reader_settings:saveSetting("tomesync_pending_sessions", self.pending_sessions)
+            self:_saveState("tomesync_pending_sessions", self.pending_sessions)
             logger.info("TomeSync: session queued for retry, pending:", #self.pending_sessions)
         end
     end
@@ -2034,7 +2345,7 @@ function TomeSync:_flushPendingSessions()
     end
 
     self.pending_sessions = remaining
-    G_reader_settings:saveSetting("tomesync_pending_sessions", remaining)
+    self:_saveState("tomesync_pending_sessions", remaining)
     if #remaining == 0 then
         logger.info("TomeSync: all pending sessions flushed")
     else
@@ -2107,7 +2418,7 @@ function TomeSync:_tryResolve()
     if rok and result and type(rcode) == "number" and rcode == 200 and result.book_id then
         self.book_id = result.book_id
         self.book_map[doc.file] = self.book_id
-        G_reader_settings:saveSetting("tomesync_book_map", self.book_map)
+        self:_saveState("tomesync_book_map", self.book_map)
         logger.info("TomeSync: resolved to book_id", self.book_id)
     else
         logger.dbg("TomeSync: could not resolve", filename)
@@ -2131,7 +2442,16 @@ function TomeSync:_initSession()
     if ok and pos and code == 200 then
         local server_pct = pos.percentage or 0
         local local_pct  = self:_getCurrentPercentage()
+        -- Pull-conflict strategy (like stock kosync): forward and backward
+        -- pulls each get prompt / silent / never. Defaults keep the historic
+        -- behavior: forward silent, backward never.
+        local mode = nil
         if server_pct > (local_pct + 0.01) and server_pct < 0.99 then
+            mode = G_reader_settings:readSetting("tomesync_pull_forward") or "silent"
+        elseif server_pct < (local_pct - 0.01) and server_pct > 0.01 then
+            mode = G_reader_settings:readSetting("tomesync_pull_backward") or "never"
+        end
+        if mode == "silent" then
             self.progress_start = server_pct
             -- Must be a toast (Notification), not an InfoMessage: this shows
             -- right when Profiles auto-exec ("on book opening") dispatches its
@@ -2145,20 +2465,26 @@ function TomeSync:_initSession()
                 ),
                 timeout = 3,
             }})
-            if self.ui and self.ui.rolling then
-                if type(pos.progress) == "string" and pos.progress:sub(1, 1) == "/" then
-                    pcall(function()
-                        self.ui.rolling:onGotoXPointer(pos.progress, pos.progress)
-                    end)
-                else
-                    -- Not a crengine xpointer (e.g. the web reader stores a
-                    -- foliate epubcfi here) — onGotoXPointer with it lands on
-                    -- page 1, so jump by percentage instead.
-                    pcall(function()
-                        self.ui.rolling:onGotoPercent(server_pct * 100)
-                    end)
-                end
-            end
+            self:_gotoServerPosition(pos, server_pct)
+        elseif mode == "prompt" then
+            self.progress_start = local_pct
+            -- Deferred: a ConfirmBox is a non-toast window, and showing one at
+            -- open time would eat the Profiles auto-exec dispatch exactly like
+            -- the InfoMessage bug above. 1.5s lets the open settle first.
+            UIManager:scheduleIn(1.5, function()
+                if not self.ui or not self.ui.document then return end
+                UIManager:show(ConfirmBox:new{{
+                    text = string.format(
+                        "TomeSync: Server position is at %.0f%% (this device: %.0f%%).\\nJump there?",
+                        server_pct * 100, local_pct * 100
+                    ),
+                    ok_text = "Jump",
+                    ok_callback = function()
+                        self.progress_start = server_pct
+                        self:_gotoServerPosition(pos, server_pct)
+                    end,
+                }})
+            end)
         else
             self.progress_start = local_pct
         end
@@ -2166,6 +2492,22 @@ function TomeSync:_initSession()
         self.progress_start = self:_getCurrentPercentage()
     end
     self.last_progress = self.progress_start
+end
+
+function TomeSync:_gotoServerPosition(pos, server_pct)
+    if not (self.ui and self.ui.rolling) then return end
+    if type(pos.progress) == "string" and pos.progress:sub(1, 1) == "/" then
+        pcall(function()
+            self.ui.rolling:onGotoXPointer(pos.progress, pos.progress)
+        end)
+    else
+        -- Not a crengine xpointer (e.g. the web reader stores a
+        -- foliate epubcfi here) — onGotoXPointer with it lands on
+        -- page 1, so jump by percentage instead.
+        pcall(function()
+            self.ui.rolling:onGotoPercent(server_pct * 100)
+        end)
+    end
 end
 
 function TomeSync:_getCurrentPercentage()
@@ -2279,11 +2621,11 @@ function TomeSync:_pullRatingAtOpen()
         end
         base.remote, base.device, base.review = remote_rating, device_rating, remote_review
         self.rating_baseline[key] = base
-        G_reader_settings:saveSetting("tomesync_rating_baseline", self.rating_baseline)
+        self:_saveState("tomesync_rating_baseline", self.rating_baseline)
         -- Tome's value supersedes any device rating still queued for this book.
         if self.pending_ratings[key] ~= nil then
             self.pending_ratings[key] = nil
-            G_reader_settings:saveSetting("tomesync_pending_ratings", self.pending_ratings)
+            self:_saveState("tomesync_pending_ratings", self.pending_ratings)
         end
         logger.info("TomeSync: applied Tome rating to device for book", self.book_id)
     elseif local_changed then
@@ -2308,7 +2650,7 @@ function TomeSync:_putRating(book_id, rating, review)
     -- A device push is whole-star, so remote and device coincide.
     base.remote, base.device, base.review = rating, rating, review
     self.rating_baseline[key] = base
-    G_reader_settings:saveSetting("tomesync_rating_baseline", self.rating_baseline)
+    self:_saveState("tomesync_rating_baseline", self.rating_baseline)
     return true
 end
 
@@ -2321,12 +2663,12 @@ function TomeSync:_pushRating(rating, review)
     if self:_putRating(self.book_id, rating, review) then
         if self.pending_ratings[key] ~= nil then
             self.pending_ratings[key] = nil
-            G_reader_settings:saveSetting("tomesync_pending_ratings", self.pending_ratings)
+            self:_saveState("tomesync_pending_ratings", self.pending_ratings)
         end
         logger.info("TomeSync: pushed device rating to Tome for book", self.book_id)
     else
         self.pending_ratings[key] = {{ rating = rating, review = review }}
-        G_reader_settings:saveSetting("tomesync_pending_ratings", self.pending_ratings)
+        self:_saveState("tomesync_pending_ratings", self.pending_ratings)
         logger.info("TomeSync: rating queued for retry for book", self.book_id)
     end
 end
@@ -2348,7 +2690,7 @@ function TomeSync:_flushPendingRatings()
         end
     end
     self.pending_ratings = remaining
-    G_reader_settings:saveSetting("tomesync_pending_ratings", remaining)
+    self:_saveState("tomesync_pending_ratings", remaining)
     if flushed then logger.info("TomeSync: pending ratings flushed") end
 end
 
@@ -2433,12 +2775,25 @@ function TomeSync:_applyServerState(alive, tombstones)
     local changed = false
     local localmap = self:_localAnnotationMap() or {{}}
 
+    -- Clamp incoming stamps to this device's clock: server-minted stamps
+    -- already arrive shifted into our frame (device_time), but stamps from a
+    -- third device with a fast clock can still be "in the future" here — and a
+    -- future stamp stored locally would outrank every later local edit. Never
+    -- store or compare a stamp ahead of now.
+    local device_now = os.date("%Y-%m-%d %H:%M:%S")
+    local function clampStamp(stamp)
+        if type(stamp) == "string" and stamp > device_now then return device_now end
+        return stamp
+    end
+
     local pending_web = {{}}
     for _, s in ipairs(alive or {{}}) do
         if isWebAnchor(s.anchor) then
             -- Not a real position — never addItem it; adopt it below instead.
             table.insert(pending_web, s)
         elseif s.anchor then
+            s.datetime         = clampStamp(s.datetime)
+            s.datetime_updated = clampStamp(s.datetime_updated)
             local L = localmap[s.anchor]
             local smtime = s.datetime_updated or s.datetime or ""
             if not L then
@@ -2460,7 +2815,7 @@ function TomeSync:_applyServerState(alive, tombstones)
     for _, t in ipairs(tombstones or {{}}) do
         local map2 = self:_localAnnotationMap() or {{}}
         local L = map2[t.anchor]
-        if L and L.mtime <= (t.deleted_at or "") then
+        if L and L.mtime <= clampStamp(t.deleted_at or "") then
             for i = #ann.annotations, 1, -1 do
                 if ann.annotations[i] == L.item then
                     table.remove(ann.annotations, i); changed = true; break
@@ -2558,7 +2913,7 @@ function TomeSync:_applyForeign(ann, s)
     end
     if not add(p0, p1) then return false end
     self.repair_map[tostring(self.book_id) .. "|" .. p0] = {{ anchor = s.anchor, anchor_end = s.anchor_end }}
-    G_reader_settings:saveSetting("tomesync_repair_map", self.repair_map)
+    self:_saveState("tomesync_repair_map", self.repair_map)
     logger.info("TomeSync: repaired foreign highlight to", p0)
     return true
 end
@@ -2603,7 +2958,7 @@ function TomeSync:_adoptWebAnnotations(pending)
         end
     end
     if adopted > 0 then
-        G_reader_settings:saveSetting("tomesync_adopt_pending", self.adopt_pending)
+        self:_saveState("tomesync_adopt_pending", self.adopt_pending)
     end
     return adopted
 end
@@ -2632,6 +2987,29 @@ function TomeSync:_syncAnnotations()
         self.ui.doc_settings:saveSetting("tomesync_annot_bound", true)
     end
 
+    -- Future-watermark guard: no local stamp may sit ahead of this device's
+    -- clock. Future stamps arrive via server-minted datetimes applied before
+    -- the clock-offset guard existed (or a third device's fast clock) and would
+    -- outrank every later local edit until the clock catches up. Clamp the
+    -- annotation AND its baseline entry to now — equal values, so no spurious
+    -- re-push, and the user's next edit is strictly newer again.
+    local now = os.date("%Y-%m-%d %H:%M:%S")   -- local wall-clock, matches KOReader's
+    for anchor, L in pairs(localmap) do
+        if L.mtime > now then
+            if L.item.datetime_updated and L.item.datetime_updated > now then
+                L.item.datetime_updated = now
+            end
+            if L.item.datetime and L.item.datetime > now then
+                L.item.datetime = now
+            end
+            L.mtime = annotMtime(L.item)
+            if baseline[anchor] ~= nil then baseline[anchor] = L.mtime end
+        end
+    end
+    for anchor, m in pairs(baseline) do
+        if m > now then baseline[anchor] = now end
+    end
+
     local upserts, deletes = {{}}, {{}}
     for anchor, L in pairs(localmap) do
         if baseline[anchor] == nil or baseline[anchor] ~= L.mtime then
@@ -2648,15 +3026,17 @@ function TomeSync:_syncAnnotations()
             end
         end
     end
-    local now = os.date("%Y-%m-%d %H:%M:%S")   -- local wall-clock, matches KOReader's
     for anchor, _ in pairs(baseline) do
         if localmap[anchor] == nil then
             table.insert(deletes, {{ anchor = anchor, datetime = now }})
         end
     end
 
+    -- device_time lets the server shift its own (web-minted) stamps into THIS
+    -- device's clock frame — see the server's clock-offset guard.
     local resp = apiRequest("POST", "/tome-sync/annotations/" .. self.book_id .. "/sync",
-                            {{ upserts = upserts, deletes = deletes }})
+                            {{ upserts = upserts, deletes = deletes,
+                               device_time = os.date("%Y-%m-%d %H:%M:%S") }})
     if not resp then return nil end   -- offline/failed: keep baseline so we retry
 
     self:_applyServerState(resp.annotations, resp.tombstones)
@@ -2682,14 +3062,14 @@ function TomeSync:_syncAnnotations()
             for _, it in ipairs(adopts) do self.adopt_pending[it.anchor] = nil end
         end
     end
-    G_reader_settings:saveSetting("tomesync_adopt_pending", self.adopt_pending)
+    self:_saveState("tomesync_adopt_pending", self.adopt_pending)
 
     -- Rebuild the baseline from the post-merge local state.
     local newbase = {{}}
     local after = self:_localAnnotationMap() or {{}}
     for anchor, L in pairs(after) do newbase[anchor] = L.mtime end
     self.annot_baseline[bk] = newbase
-    G_reader_settings:saveSetting("tomesync_annot_baseline", self.annot_baseline)
+    self:_saveState("tomesync_annot_baseline", self.annot_baseline)
 
     -- Drop aliases whose local rendering is gone (a local delete already went
     -- out under the server identity above) so the map can't grow stale.
@@ -2704,13 +3084,13 @@ function TomeSync:_syncAnnotations()
             self.repair_map[key] = nil; pruned = true
         end
     end
-    if pruned then G_reader_settings:saveSetting("tomesync_repair_map", self.repair_map) end
+    if pruned then self:_saveState("tomesync_repair_map", self.repair_map) end
     return resp
 end
 
 function TomeSync:registerBookId(file_path, book_id)
     self.book_map[file_path] = book_id
-    G_reader_settings:saveSetting("tomesync_book_map", self.book_map)
+    self:_saveState("tomesync_book_map", self.book_map)
     logger.info("TomeSync: registered book_id", book_id, "for", file_path)
 end
 
@@ -2902,7 +3282,7 @@ function TomeSync:_downloadSeriesBooks(series_name, books, min_index, book_type,
     if progress_msg then UIManager:close(progress_msg) end
 
     -- Persist book_map
-    G_reader_settings:saveSetting("tomesync_book_map", self.book_map)
+    self:_saveState("tomesync_book_map", self.book_map)
 
     if not quiet then
         if failed > 0 and #failed_books > 0 then
@@ -2944,18 +3324,20 @@ function TomeSync:_downloadSeriesBooks(series_name, books, min_index, book_type,
     return {{ downloaded = downloaded, skipped = skipped, failed = failed }}
 end
 
--- Drill-down list for one series (or the No Series bucket): a "Download all" row
--- plus one row per book, so a single title can be downloaded on its own.
-function TomeSync:_seriesBooksMenu(data)
-    local display = data.series_name
-    if display == "__unserialized__" then display = "No Series" end
-
+-- Shared drill-down list: a "Download all" row plus one row per book. Used by
+-- the series browser, the author browser, and search results. Tap downloads a
+-- book; hold sets its read status. `data`:
+--   title        menu title
+--   books        list of server book entries
+--   series_name  filing default for books without their own series (optional)
+--   book_type    filing fallback for older servers (optional)
+--   mixed        true → prefix each row with the book's own series
+--   reload       called after a status write-back to rebuild with fresh data
+function TomeSync:_bookListMenu(data)
     local items = {{}}
     table.insert(items, {{
         text     = string.format("Download all (%d)", #data.books),
-        callback = function()
-            self:_downloadSeriesBooks(data.series_name, data.books, nil, data.book_type)
-        end,
+        callback = function() self:_downloadListBooks(data, nil) end,
     }})
     -- book_id → on-device path (same signal the download queue uses to skip)
     local id_to_path = {{}}
@@ -2971,25 +3353,273 @@ function TomeSync:_seriesBooksMenu(data)
         else
             label = book.title
         end
+        if data.mixed and type(book.series) == "string" and book.series ~= "" then
+            label = book.series .. " · " .. label
+        end
         if id_to_path[book.id] then
             label = label .. "  · on device"
         end
+        -- Status marker (build 33): only for the non-default states.
+        if book.status == "reading" or book.status == "read" then
+            label = label .. "  · " .. book.status
+        end
         table.insert(items, {{
             text     = label,
-            callback = function()
-                self:_downloadSeriesBooks(data.series_name, {{ book }}, nil, data.book_type)
-            end,
+            book     = book,
+            callback = function() self:_downloadListBooks(data, book) end,
         }})
     end
 
-    local menu = Menu:new{{
-        title       = display,
+    local menu
+    menu = Menu:new{{
+        title       = data.title,
         item_table  = items,
         width       = Device.screen:getWidth() - 20,
         height      = Device.screen:getHeight() - 20,
         show_parent = self.ui or UIManager,
     }}
+    -- Hold a book row to set its read status (write-back to Tome).
+    menu.onMenuHold = function(_, item)
+        if item.book then
+            self:_statusDialog(item.book, function()
+                UIManager:close(menu)
+                if data.reload then data.reload() end
+            end)
+        end
+        return true
+    end
     UIManager:show(menu)
+end
+
+-- Route one book (or the whole list) into the download machinery with the
+-- right filing identity: a book with its own series files under that series;
+-- a standalone files like the No Series bucket (book-type/author folders).
+function TomeSync:_downloadListBooks(data, book)
+    local function seriesOf(b)
+        if type(b.series) == "string" and b.series ~= "" then return b.series end
+        return data.series_name or "__unserialized__"
+    end
+    if book then
+        self:_downloadSeriesBooks(seriesOf(book), {{ book }}, nil,
+                                  book.book_type or data.book_type)
+        return
+    end
+    if data.series_name then
+        -- Homogeneous list (one series / the No Series bucket): one batch.
+        self:_downloadSeriesBooks(data.series_name, data.books, nil, data.book_type)
+        return
+    end
+    -- Mixed list (author / search): file each book by its own identity, then
+    -- roll the counts up into one summary.
+    local downloaded, skipped, failed = 0, 0, 0
+    for _, b in ipairs(data.books) do
+        local r = self:_downloadSeriesBooks(seriesOf(b), {{ b }}, nil, b.book_type, true)
+        downloaded = downloaded + (r.downloaded or 0)
+        skipped    = skipped + (r.skipped or 0)
+        failed     = failed + (r.failed or 0)
+    end
+    UIManager:show(InfoMessage:new{{
+        text = string.format("%s\\n\\nDownloaded: %d\\nSkipped: %d\\nFailed: %d",
+                             data.title or "Download", downloaded, skipped, failed),
+        timeout = 6,
+    }})
+end
+
+-- Hold-a-row dialog: set unread/reading/read on the server (deliberate user
+-- action — unlike telemetry, which only suggests status).
+function TomeSync:_statusDialog(book, on_done)
+    local dialog
+    local function setStatus(status)
+        UIManager:close(dialog)
+        whenConnected(function()
+            local ok, resp, code = pcall(apiRequest, "PUT", "/tome-sync/status/" .. book.id,
+                                         {{ status = status }})
+            if ok and type(code) == "number" and code < 300 then
+                book.status = status
+                UIManager:show(Notification:new{{
+                    text = string.format('"%s" marked %s.', book.title or "Book", status),
+                    timeout = 2,
+                }})
+                if on_done then on_done() end
+            else
+                UIManager:show(InfoMessage:new{{
+                    text = "Could not update status (" .. tostring(code) .. ").",
+                    timeout = 4,
+                }})
+            end
+        end)
+    end
+    dialog = ButtonDialog:new{{
+        title = (book.title or "Book") .. "\\nSet read status",
+        buttons = {{
+            {{ {{ text = "Unread",  callback = function() setStatus("unread") end }} }},
+            {{ {{ text = "Reading", callback = function() setStatus("reading") end }} }},
+            {{ {{ text = "Read",    callback = function() setStatus("read") end }} }},
+        }},
+    }}
+    UIManager:show(dialog)
+end
+
+-- Adapter kept for the series flow (name/shape unchanged for its callers).
+function TomeSync:_seriesBooksMenu(data)
+    local display = data.series_name
+    if display == "__unserialized__" then display = "No Series" end
+    self:_bookListMenu{{
+        title       = display,
+        books       = data.books,
+        series_name = data.series_name,
+        book_type   = data.book_type,
+        reload      = function()
+            if #data.books > 0 then self:_openSeriesBooks(data.books[1].id) end
+        end,
+    }}
+end
+
+-- ── Author browse axis (build 33) ────────────────────────────────────────────
+
+function TomeSync:_authorsMenu()
+    whenConnected(function() self:_authorsMenuImpl() end)
+end
+
+function TomeSync:_authorsMenuImpl()
+    local ok, authors, code = pcall(apiRequest, "GET", "/tome-sync/authors")
+    if not ok or type(authors) ~= "table" or (type(code) == "number" and code >= 300) then
+        UIManager:show(ConfirmBox:new{{
+            text = "Failed to load authors.",
+            ok_text = "Retry",
+            cancel_text = "Close",
+            ok_callback = function() self:_authorsMenuImpl() end,
+        }})
+        return
+    end
+    local items = {{}}
+    for _, a in ipairs(authors) do
+        local name = a.name
+        if name == "__unknown__" then name = "Unknown author" end
+        table.insert(items, {{
+            text = name .. " (" .. a.book_count .. ")",
+            callback = function() self:_openAuthorBooks(a.name) end,
+        }})
+    end
+    UIManager:show(Menu:new{{
+        title = "Authors",
+        item_table = items,
+        width = Device.screen:getWidth() - 20,
+        height = Device.screen:getHeight() - 20,
+        show_parent = self.ui or UIManager,
+    }})
+end
+
+function TomeSync:_openAuthorBooks(author)
+    local ok, data, code = pcall(apiRequest, "GET",
+        "/tome-sync/author-books?author=" .. urlEncode(author))
+    if ok and type(data) == "table" and data.books then
+        local display = author
+        if display == "__unknown__" then display = "Unknown author" end
+        self:_bookListMenu{{
+            title  = display,
+            books  = data.books,
+            mixed  = true,
+            reload = function() self:_openAuthorBooks(author) end,
+        }}
+    else
+        UIManager:show(ConfirmBox:new{{
+            text = "Failed to load author's books.",
+            ok_text = "Retry",
+            cancel_text = "Close",
+            ok_callback = function() self:_openAuthorBooks(author) end,
+        }})
+    end
+    local _ = code
+end
+
+-- ── Search from the device (build 33) ────────────────────────────────────────
+
+function TomeSync:_recentSearches()
+    return self.state:readSetting("tomesync_recent_searches") or {{}}
+end
+
+function TomeSync:_rememberSearch(q)
+    local recents = self:_recentSearches()
+    for i = #recents, 1, -1 do
+        if recents[i] == q then table.remove(recents, i) end
+    end
+    table.insert(recents, 1, q)
+    while #recents > 8 do table.remove(recents) end
+    self:_saveState("tomesync_recent_searches", recents)
+end
+
+function TomeSync:_searchMenu()
+    -- Submit-based input (the right call on e-ink), with recent searches one
+    -- tap away underneath.
+    local dialog
+    dialog = InputDialog:new{{
+        title = "Search library",
+        input_hint = "title, author, or series",
+        buttons = {{{{
+            {{ text = "Cancel", id = "close",
+              callback = function() UIManager:close(dialog) end }},
+            {{ text = "Search", is_enter_default = true,
+              callback = function()
+                  local q = dialog:getInputText()
+                  if q and q:match("%S") then
+                      UIManager:close(dialog)
+                      self:_runSearch(q)
+                  end
+              end }},
+        }}}},
+    }}
+    local recents = self:_recentSearches()
+    if #recents > 0 then
+        -- A second row of up to 3 recent queries; the full list lives in the
+        -- results menu title history anyway, and 3 covers the muscle-memory case.
+        local row = {{}}
+        for i = 1, math.min(3, #recents) do
+            local q = recents[i]
+            table.insert(row, {{ text = q, callback = function()
+                UIManager:close(dialog)
+                self:_runSearch(q)
+            end }})
+        end
+        table.insert(dialog.buttons, 1, row)
+    end
+    UIManager:show(dialog)
+    dialog:onShowKeyboard()
+end
+
+function TomeSync:_runSearch(q)
+    whenConnected(function()
+        local ok, data, code = pcall(apiRequest, "GET",
+            "/tome-sync/search?q=" .. urlEncode(q))
+        if not ok or type(data) ~= "table" or not data.books
+                or (type(code) == "number" and code >= 300) then
+            UIManager:show(ConfirmBox:new{{
+                text = "Search failed.",
+                ok_text = "Retry",
+                cancel_text = "Close",
+                ok_callback = function() self:_runSearch(q) end,
+            }})
+            return
+        end
+        self:_rememberSearch(q)
+        if #data.books == 0 then
+            UIManager:show(InfoMessage:new{{
+                text = 'No results for "' .. q .. '".',
+                timeout = 3,
+            }})
+            return
+        end
+        local title = string.format('Search: %s (%d)', q, data.total or #data.books)
+        if (data.total or 0) > #data.books then
+            title = string.format('Search: %s (%d of %d)', q, #data.books, data.total)
+        end
+        self:_bookListMenu{{
+            title  = title,
+            books  = data.books,
+            mixed  = true,
+            reload = function() self:_runSearch(q) end,
+        }}
+    end)
 end
 
 function TomeSync:_browseSeriesMenu()
@@ -3017,6 +3647,17 @@ function TomeSync:_browseSeriesMenuImpl()
     end
 
     local items = {{}}
+    -- Cross-axis entry points (build 33): search and the author axis live at
+    -- the top of the browser, so standalones aren't stuck behind "No Series".
+    table.insert(items, {{
+        text     = "Search library…",
+        callback = function() self:_searchMenu() end,
+    }})
+    table.insert(items, {{
+        text      = "Browse by author",
+        separator = true,
+        callback  = function() self:_authorsMenu() end,
+    }})
     for _, s in ipairs(series_list) do
         local name = s.name
         if name == "__unserialized__" then name = "No Series" end
@@ -3367,6 +4008,46 @@ function TomeSync:_menuItems()
                 not G_reader_settings:isTrue("tomesync_auto_connect"))
         end,
     }})
+    -- Position pull strategy (like stock kosync): what to do when the server
+    -- position differs from this device's on book open.
+    local function pullModeItems(key, default)
+        local function current()
+            return G_reader_settings:readSetting(key) or default
+        end
+        local items = {{}}
+        for _, m in ipairs({{
+            {{ "prompt", "Ask before jumping" }},
+            {{ "silent", "Jump automatically" }},
+            {{ "never",  "Do nothing" }},
+        }}) do
+            local value, label = m[1], m[2]
+            table.insert(items, {{
+                text         = label,
+                checked_func = function() return current() == value end,
+                callback     = function()
+                    if value == default then
+                        G_reader_settings:delSetting(key)
+                    else
+                        G_reader_settings:saveSetting(key, value)
+                    end
+                end,
+            }})
+        end
+        return items
+    end
+    table.insert(settings_items, {{
+        text           = "Server position is ahead",
+        help_text      = "What to do on book open when the server position is "
+                       .. "further along than this device (you read elsewhere).",
+        sub_item_table = pullModeItems("tomesync_pull_forward", "silent"),
+    }})
+    table.insert(settings_items, {{
+        text           = "Server position is behind",
+        help_text      = "What to do on book open when the server position is "
+                       .. "earlier than this device (e.g. re-reading a section "
+                       .. "on another device).",
+        sub_item_table = pullModeItems("tomesync_pull_backward", "never"),
+    }})
     local function currentTemplate()
         return G_reader_settings:readSetting("tomesync_download_template") or ""
     end
@@ -3464,7 +4145,7 @@ function TomeSync:_menuItems()
         callback = function()
             self.book_map = {{}}
             self.book_id = nil
-            G_reader_settings:saveSetting("tomesync_book_map", {{}})
+            self:_saveState("tomesync_book_map", {{}})
             UIManager:show(InfoMessage:new{{
                 text = "All book mappings cleared.\\nRe-open a book to re-resolve.",
                 timeout = 3,

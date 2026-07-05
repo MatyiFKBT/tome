@@ -7,6 +7,28 @@ All notable changes to Tome are documented here. Format loosely follows
 ## [Unreleased]
 
 ### Added
+- **Search your library from the device (KOReader plugin, build 33).** The
+  series browser gains a "Search library…" entry: submit-based free-text search
+  over title, author, and series, with your last searches one tap away. Results
+  open the same drill-down list as a series — tap to download, hold to set read
+  status.
+- **Browse by author on the device (build 33).** A new author axis in the
+  series browser — the natural way into standalone books, which previously all
+  hid behind the single "No Series" bucket. Downloads file each book by its own
+  series/author identity, exactly like the web.
+- **Set read status from the device browser (build 33).** Hold any book row in
+  a series, author, or search list to mark it unread / reading / read on the
+  server — no need to open the book. The lists also show each book's current
+  status alongside the existing "on device" marker.
+
+- **Position pull strategy (KOReader plugin, build 32).** What happens on book
+  open when the server position differs from the device is now configurable,
+  like stock KOSync: "Server position is ahead" and "Server position is
+  behind" each offer *Ask before jumping / Jump automatically / Do nothing*
+  (TomeSync settings). Defaults keep the historic behavior — forward jumps
+  happen silently, backward jumps never — and the ask-dialog is deferred a
+  moment after open so it can never swallow a "on book opening" profile the
+  way the old layout-reset bug did.
 - **Highlights page polish.** The deferred cluster from the original
   commonplace-book release: an **only-notes filter** (show just the highlights
   carrying your own notes — composes with search and on-this-day), a real
@@ -29,6 +51,25 @@ All notable changes to Tome are documented here. Format loosely follows
   pagination is not a property of the book). Backfilled by the same admin job.
 
 ### Fixed
+- **A fast server clock can no longer silently swallow highlights (build 32).**
+  Highlight edits and deletes made in the web reader are stamped with the
+  server's clock; on a device whose clock runs behind (UTC container vs local
+  device time), those stamps landed in the device's future and outranked every
+  later local change — a re-highlight after a web delete just vanished until
+  the clocks crossed. The plugin now stamps its wall-clock on every highlight
+  sync and the server shifts the stamps it minted itself into that device's
+  clock frame, both when comparing and in what it returns; the plugin
+  additionally refuses to store any stamp from the future. Older plugins keep
+  the previous behavior.
+- **The TomeSync plugin no longer bloats KOReader's global settings file
+  (build 32).** Its data tables (book map, pending sessions and ratings, sync
+  baselines, repair aliases) — which grow with your library and were parsed by
+  KOReader at every boot — moved into a dedicated `tomesync_state.lua`,
+  migrated automatically and crash-safely on first launch. State for books no
+  longer on the device is pruned; pending queues are never pruned.
+- **The plugin's series list no longer runs one query per series.** Loading the
+  series browser was an N+1 that scaled with the library; it's now a single
+  query with the same response.
 - **The Highlights "copy all as Markdown" export never worked.** It requested
   more highlights than the API's page cap allowed, got a 422, and failed
   without any feedback. The cap is raised, the export stays under it, and a
