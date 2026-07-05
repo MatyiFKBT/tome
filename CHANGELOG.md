@@ -6,6 +6,22 @@ All notable changes to Tome are documented here. Format loosely follows
 
 ## [Unreleased]
 
+### Added
+- **Highlights page polish.** The deferred cluster from the original
+  commonplace-book release: an **only-notes filter** (show just the highlights
+  carrying your own notes — composes with search and on-this-day), a real
+  **file export** (download all matching highlights as a Markdown file, next to
+  the existing copy-to-clipboard), **keyboard shortcuts** (`/` search, `Esc`
+  clear, `c` collapse all, `n` only-notes, `e` export — listed in the `?`
+  help), and a **shuffle button** on the Home tab's highlight spotlight that
+  re-rolls to a different quote.
+
+### Fixed
+- **The Highlights "copy all as Markdown" export never worked.** It requested
+  more highlights than the API's page cap allowed, got a 422, and failed
+  without any feedback. The cap is raised, the export stays under it, and a
+  failure now shows an error toast instead of silently doing nothing.
+
 ## [1.8.0] — 2026-07-05 — "Spine"
 
 ### Added
