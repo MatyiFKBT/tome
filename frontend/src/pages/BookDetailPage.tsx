@@ -143,7 +143,10 @@ export function BookDetailPage() {
   const [confirmingHighlight, setConfirmingHighlight] = useState<number | null>(null)
   const [highlightsOpen, setHighlightsOpen] = useState(true)
   const [readingStats, setReadingStats] = useState<ReadingStatsResponse | null>(null)
-  const [statsOpen, setStatsOpen] = useState(true)
+  // Collapsed state persists across books/visits — the stats tower (hero +
+  // intensity + time-per-chapter) has grown tall enough that "keep it closed"
+  // is a real preference, not a per-page whim.
+  const [statsOpen, setStatsOpen] = useState(() => localStorage.getItem('tome_book_stats_open') !== '0')
   const [descExpanded, setDescExpanded] = useState(false)
   const [facets, setFacets] = useState<Facets>({ authors: [], series: [], tags: [], formats: [] })
   const [draftTags, setDraftTags] = useState<string[]>([])
@@ -703,7 +706,7 @@ export function BookDetailPage() {
       <div className="flex items-center gap-2 mb-2.5">
         <button
           type="button"
-          onClick={() => setStatsOpen(o => !o)}
+          onClick={() => setStatsOpen(o => { localStorage.setItem('tome_book_stats_open', o ? '0' : '1'); return !o })}
           aria-expanded={statsOpen}
           className="flex items-center gap-1.5 font-display text-base text-foreground hover:text-primary transition-colors"
         >
@@ -1190,13 +1193,16 @@ export function BookDetailPage() {
               </div>
             )}
           </div>
-          {/* Right column: title → status → stats → description → details grid → highlights */}
+          {/* Right column: title → status → description → stats → details grid → highlights.
+              Description before stats: the page leads with what the book IS;
+              the telemetry tower (hero + intensity + chapters) comes after and
+              collapses as one. */}
           <div className="flex-1 min-w-0">
             {titleBlock}
             {statusProgressBlock}
             {ratingBlock}
-            {statsFull}
             {descriptionBlock}
+            {statsFull}
             {metadataGridFull}
             {highlightsBlock}
           </div>
