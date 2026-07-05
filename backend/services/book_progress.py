@@ -19,9 +19,75 @@ Rules:
 from datetime import datetime
 from typing import Optional
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from backend.models.tome_sync import TomeSyncPosition
 from backend.models.user_book_status import UserBookStatus
+
+
+def upsert_position(
+    db: Session,
+    *,
+    user_id: int,
+    book_id: int,
+    percentage: float,
+    progress: Optional[str],
+    device: Optional[str],
+) -> TomeSyncPosition:
+    """Insert-or-update the single (user, book) reading-position row.
+
+    Both the device heartbeat and the web reader's autosave write positions;
+    with a UNIQUE(user_id, book_id) constraint in place, a losing concurrent
+    INSERT raises IntegrityError, which we absorb (via a SAVEPOINT so the
+    caller's other pending changes survive) and retry as an UPDATE. The two
+    writers then converge on one row instead of silently forking into two.
+    Does not commit — the caller owns the transaction.
+    """
+    row = (
+        db.query(TomeSyncPosition)
+        .filter(TomeSyncPosition.user_id == user_id, TomeSyncPosition.book_id == book_id)
+        .first()
+    )
+    if row is None:
+        row = TomeSyncPosition(
+            user_id=user_id, book_id=book_id,
+            percentage=percentage, progress=progress, device=device,
+        )
+        try:
+            with db.begin_nested():
+                db.add(row)
+                db.flush()
+            return row
+        except IntegrityError:
+            # Another writer created the row between our SELECT and INSERT.
+            row = (
+                db.query(TomeSyncPosition)
+                .filter(TomeSyncPosition.user_id == user_id,
+                        TomeSyncPosition.book_id == book_id)
+                .first()
+            )
+            if row is None:
+                raise
+
+    row.percentage = percentage
+    row.progress = progress
+    row.device = device
+    row.updated_at = datetime.utcnow()
+    return row
+
+
+def clear_position(db: Session, *, user_id: int, book_id: int) -> None:
+    """Drop the synced reading position for a user+book.
+
+    Called when the web explicitly resets a book to "unread": otherwise the
+    stale position row survives, the device re-pulls it on open, and the reset
+    un-does itself. Does not commit — the caller owns the transaction.
+    """
+    db.query(TomeSyncPosition).filter(
+        TomeSyncPosition.user_id == user_id,
+        TomeSyncPosition.book_id == book_id,
+    ).delete(synchronize_session=False)
 
 
 def apply_progress_to_status(

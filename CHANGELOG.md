@@ -76,6 +76,30 @@ All notable changes to Tome are documented here. Format loosely follows
   folder is kept. The same whitelist governs the folder cleanup after a
   reorganise, which also no longer errors out after the moves have already
   succeeded.
+- **A sideloaded book can no longer hijack another book's reading progress.**
+  When KOReader opens a file Tome never served (a sideload, or a copy renamed
+  on the device), Tome matches it to a library book by filename as a last
+  resort. That matcher was too eager: a short title like *"It"* matched
+  *The Italian Job*, a `Foo v2` filename landed on a standalone *"Foo"*, and a
+  year in the name (`… - 1984 - …`) was misread as "volume 1984". Any of these
+  silently wrote one book's position, sessions and highlights onto another.
+  Matching is now strict — whole-word title matches, a minimum length before a
+  substring counts, and a volume number in the filename must line up with the
+  book's actual volume — and when it can't be sure it declines (the device just
+  keeps tracking locally) rather than guessing. Books downloaded from Tome are
+  unaffected: they match by content hash, not by name.
+- **Reading position no longer flaps between two values.** The position table
+  had no uniqueness guard, so a device sync and a web-reader save landing at
+  the same moment could each create a row for the same book — after which reads
+  picked an arbitrary one and the progress appeared to jump back and forth (and
+  stats double-counted it). There is now one position per book, both writers
+  update it in place, and a one-time cleanup collapses any existing duplicates
+  to the most recent.
+- **Marking a book "unread" on the web now sticks on your device too.** The
+  reset cleared the web side but left the synced position untouched, so the
+  next time the book opened on KOReader it jumped back to where you'd been and
+  flipped itself to "reading" again. Marking a book unread now also clears the
+  synced position.
 - **Hardcover sync could pin a translation's or the audiobook's edition.**
   Publishers reuse one catalogue across translations and audio, so a stored
   ISBN sometimes names the German edition (or the audiobook) of the right

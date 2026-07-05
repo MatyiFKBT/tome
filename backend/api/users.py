@@ -12,6 +12,7 @@ from backend.core.ratings import validate_rating
 from backend.core.security import get_current_user
 from backend.core.permissions import require_role
 from backend.services.hardcover_sync import nudge as hardcover_nudge
+from backend.services.book_progress import upsert_position, clear_position
 from backend.models.user import User, UserPermission
 from backend.models.user_book_status import UserBookStatus
 from backend.models.tome_sync import ReadingSession, TomeSyncPosition
@@ -134,6 +135,9 @@ def set_book_status(
         if body.status == 'unread':
             row.progress_pct = None
             row.cfi = None
+            # Drop the synced device position too, or the device re-pulls it on
+            # open and the "unread" reset silently un-does itself.
+            clear_position(db, user_id=current_user.id, book_id=book_id)
         else:
             if 'progress_pct' in raw:
                 row.progress_pct = body.progress_pct
@@ -158,25 +162,23 @@ def set_book_status(
     # progress_pct is a 0–1 fraction end-to-end (API field, UserBookStatus.progress_pct,
     # and TomeSyncPosition.percentage), so no scaling is needed.
     if body.progress_pct is not None or body.cfi is not None:
-        pos = db.query(TomeSyncPosition).filter(
+        # Upsert against the UNIQUE(user, book) constraint so a device heartbeat
+        # racing this write can't fork a duplicate position row. Preserve the
+        # partial-update semantics: only overwrite the fields actually sent.
+        existing = db.query(TomeSyncPosition).filter(
             TomeSyncPosition.user_id == current_user.id,
             TomeSyncPosition.book_id == book_id,
         ).first()
-        if pos:
-            if body.progress_pct is not None:
-                pos.percentage = body.progress_pct
-            if body.cfi is not None:
-                pos.progress = body.cfi
-            pos.device = "web"
-            pos.updated_at = datetime.utcnow()
-        else:
-            db.add(TomeSyncPosition(
-                user_id=current_user.id,
-                book_id=book_id,
-                percentage=(body.progress_pct or 0),
-                progress=body.cfi,
-                device="web",
-            ))
+        pct = body.progress_pct if body.progress_pct is not None else (
+            existing.percentage if existing else 0.0
+        )
+        cfi = body.cfi if body.cfi is not None else (
+            existing.progress if existing else None
+        )
+        upsert_position(
+            db, user_id=current_user.id, book_id=book_id,
+            percentage=pct, progress=cfi, device="web",
+        )
         db.commit()
 
     # ── Web reader session tracking ──────────────────────────────────────────

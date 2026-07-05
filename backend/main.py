@@ -145,6 +145,30 @@ async def lifespan(app: FastAPI):
         if qc_cols and "poll_token" not in qc_cols:
             conn.execute(text("ALTER TABLE quick_connect_codes ADD COLUMN poll_token VARCHAR(64)"))
             conn.commit()
+        # Enforce one reading-position row per (user, book). Concurrent device
+        # and web first-writes could previously both INSERT, leaving duplicate
+        # rows that made position reads flap and double-counted stats joins.
+        # Dedupe (keep the freshest) before adding the constraint so it can't
+        # fail on legacy data.
+        tsp_cols = {r[1] for r in conn.execute(text("PRAGMA table_info(tome_sync_positions)")).fetchall()}
+        if tsp_cols:
+            conn.execute(text("""
+                DELETE FROM tome_sync_positions
+                WHERE id NOT IN (
+                    SELECT keep_id FROM (
+                        SELECT id AS keep_id, ROW_NUMBER() OVER (
+                            PARTITION BY user_id, book_id
+                            ORDER BY updated_at DESC, id DESC
+                        ) AS rn
+                        FROM tome_sync_positions
+                    ) WHERE rn = 1
+                )
+            """))
+            conn.execute(text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_tspos_user_book "
+                "ON tome_sync_positions (user_id, book_id)"
+            ))
+            conn.commit()
         # Per-user ratings/reviews on user_book_status (nullable — existing rows stay unrated).
         ubs_cols = {r[1] for r in conn.execute(text("PRAGMA table_info(user_book_status)")).fetchall()}
         if ubs_cols and "rating" not in ubs_cols:
