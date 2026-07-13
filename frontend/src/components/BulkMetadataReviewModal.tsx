@@ -324,7 +324,7 @@ export function BulkMetadataReviewModal({ bookIds, open, onClose, onApplied, onM
                             <div className="flex items-center gap-1.5 flex-wrap">
                               <p className="text-sm font-medium line-clamp-1">{match.title}</p>
                               <span className="shrink-0 text-[9px] px-1 py-0.5 rounded bg-muted text-muted-foreground border border-border">
-                                {match.source === 'hardcover' ? 'Hardcover' : match.source === 'google_books' ? 'Google' : 'OpenLib'}
+                                {match.source === 'hardcover' ? 'Hardcover' : match.source === 'google_books' ? 'Google' : match.source === 'moly' ? 'Moly' : 'OpenLib'}
                               </span>
                             </div>
                             <div className="flex gap-2 flex-wrap mt-0.5">
@@ -397,7 +397,7 @@ export function BulkMetadataReviewModal({ bookIds, open, onClose, onApplied, onM
                               <span className="font-medium line-clamp-1">{c.title}</span>
                               {c.author && <span className="text-muted-foreground ml-1">· {c.author}</span>}
                               <span className="ml-1 text-[9px] px-1 py-0.5 rounded bg-muted text-muted-foreground border border-border">
-                                {c.source === 'hardcover' ? 'Hardcover' : c.source === 'google_books' ? 'Google' : 'OpenLib'}
+                                {c.source === 'hardcover' ? 'Hardcover' : c.source === 'google_books' ? 'Google' : c.source === 'moly' ? 'Moly' : 'OpenLib'}
                               </span>
                               {c.year && <span className="text-muted-foreground ml-1">· {c.year}</span>}
                               {c.description && <p className="text-muted-foreground line-clamp-1 mt-0.5">{c.description}</p>}

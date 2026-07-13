@@ -483,7 +483,7 @@ function ReviewFlow({ queue, onBack, onBookUpdated }: ReviewFlowProps) {
                       <div className="flex items-start justify-between gap-1">
                         <p className="text-xs font-medium line-clamp-1">{c.title}</p>
                         <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded border border-border text-muted-foreground bg-muted">
-                          {c.source === 'hardcover' ? 'HC' : c.source === 'google_books' ? 'GB' : c.source === 'anilist' ? 'AL' : 'OL'}
+                          {c.source === 'hardcover' ? 'HC' : c.source === 'google_books' ? 'GB' : c.source === 'anilist' ? 'AL' : c.source === 'moly' ? 'ML' : 'OL'}
                         </span>
                       </div>
                       {c.author && <p className="text-[11px] text-muted-foreground">{c.author}</p>}

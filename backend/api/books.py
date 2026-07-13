@@ -1575,7 +1575,7 @@ def get_cover(
 
 
 class CoverCandidateOut(PydanticBaseModel):
-    source: str   # "hardcover" | "google_books" | "open_library"
+    source: str   # "hardcover" | "google_books" | "open_library" | "anilist" | "moly"
     label: str
     cover_url: str
 

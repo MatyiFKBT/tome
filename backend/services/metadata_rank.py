@@ -18,7 +18,7 @@ import difflib
 import re
 from dataclasses import dataclass
 
-_SOURCE_PRIORITY = {"hardcover": 0, "google_books": 1, "open_library": 2, "anilist": 3}
+_SOURCE_PRIORITY = {"hardcover": 0, "google_books": 1, "open_library": 2, "anilist": 3, "moly": 2}
 
 _ART_WORDS = ("manga", "manhwa", "manhua", "webtoon", "comic", "graphic")
 _PROSE_WORDS = ("novel", "book")

@@ -10,7 +10,7 @@ import respx
 
 from backend.core.config import settings
 from backend.services import metadata_fetch as mf
-from backend.services.metadata_rank import ScoreContext, merge_candidates, rank_candidates, score_candidate
+from backend.services.metadata_rank import ScoreContext, _SOURCE_PRIORITY, merge_candidates, rank_candidates, score_candidate
 
 pytestmark = pytest.mark.anyio
 
@@ -54,6 +54,7 @@ def _empty_ol():
 def _token(monkeypatch):
     monkeypatch.setattr(settings, "hardcover_token", "hc_test")
     monkeypatch.setattr(settings, "google_books_key", None)
+    monkeypatch.setattr(settings, "moly_key", None)
     mf._source_cache.clear()   # module-level TTL cache persists across tests
     # Details second-call for hardcover returns nothing extra.
     yield
@@ -281,3 +282,137 @@ async def test_concurrent_series_volumes_share_one_anilist_call():
     for r in results:
         assert r.sources["anilist"] == "ok"
         assert any(c.source == "anilist" for c in r.candidates)
+
+
+# ── Moly.hu ──────────────────────────────────────────────────────────────────
+
+MOLY_SEARCH = f"{mf.MOLY_API_URL}/books.json"
+MOLY_ISBN = f"{mf.MOLY_API_URL}/book_by_isbn.json"
+
+
+def _moly_search_payload(title="Egri csillagok", book_id=100):
+    return {"books": [{"id": book_id, "title": title}]}
+
+
+def _moly_book_payload(
+    title="Egri csillagok",
+    book_id=100,
+    description="Történelmi regény.",
+    like_average=4.5,
+    authors=None,
+    tags=None,
+):
+    return {"book": {
+        "id": book_id,
+        "title": title,
+        "description": description,
+        "like_average": like_average,
+        "authors": authors or [{"name": "Géza Gárdonyi"}],
+        "tags": tags or [{"name": "magyar nyelvű"}, {"name": "történelmi regény"}, {"name": "klasszikus"}],
+    }}
+
+
+def _moly_editions_payload(isbn="9631234567890", publisher="Móra", year=2000, cover=None):
+    return {"editions": [{
+        "id": 200,
+        "isbn": isbn,
+        "publisher": publisher,
+        "year": year,
+        "cover": cover or "https://moly.hu/system/covers/normal/covers_100.jpg",
+    }]}
+
+
+@respx.mock
+async def test_moly_disabled_without_key():
+    """No TOME_MOLY_KEY → moly is disabled, not in sources."""
+    respx.post(HC).mock(return_value=httpx.Response(200, json=_hc_payload("Anything")))
+    respx.get(GB).mock(return_value=httpx.Response(200, json=_empty_gb()))
+    respx.get(OL).mock(return_value=httpx.Response(200, json=_empty_ol()))
+
+    result = await mf.fetch_candidates("Anything")
+    assert "moly" not in result.sources
+
+
+@respx.mock
+async def test_moly_search_returns_candidates(monkeypatch):
+    """With a key, moly search + detail/edition fetch produces a candidate."""
+    monkeypatch.setattr(settings, "moly_key", "moly_test_key")
+    respx.post(HC).mock(return_value=httpx.Response(200, json=_hc_payload("Egri csillagok")))
+    respx.get(GB).mock(return_value=httpx.Response(200, json=_empty_gb()))
+    respx.get(OL).mock(return_value=httpx.Response(200, json=_empty_ol()))
+
+    respx.get(MOLY_SEARCH).mock(return_value=httpx.Response(200, json=_moly_search_payload()))
+    respx.get(f"{mf.MOLY_API_URL}/book/100.json").mock(
+        return_value=httpx.Response(200, json=_moly_book_payload()))
+    respx.get(f"{mf.MOLY_API_URL}/book_editions/100.json").mock(
+        return_value=httpx.Response(200, json=_moly_editions_payload()))
+
+    result = await mf.fetch_candidates("Egri csillagok")
+    assert result.sources["moly"] == "ok"
+    moly = [c for c in result.candidates if c.source == "moly"]
+    assert len(moly) == 1
+    c = moly[0]
+    assert c.title == "Egri csillagok"
+    assert c.author == "Géza Gárdonyi"
+    assert c.isbn == "9631234567890"
+    assert c.publisher == "Móra"
+    assert c.year == 2000
+    assert c.language == "hu"
+    assert c.cover_url == "https://moly.hu/system/covers/big/covers_100.jpg"
+    assert "történelmi regény" in c.tags
+
+
+@respx.mock
+async def test_moly_isbn_lookup(monkeypatch):
+    """When an ISBN is present, moly uses the book_by_isbn endpoint."""
+    monkeypatch.setattr(settings, "moly_key", "moly_test_key")
+    respx.post(HC).mock(return_value=httpx.Response(200, json=_hc_payload("Test")))
+    respx.get(GB).mock(return_value=httpx.Response(200, json=_empty_gb()))
+    respx.get(OL).mock(return_value=httpx.Response(200, json=_empty_ol()))
+
+    respx.get(MOLY_ISBN).mock(return_value=httpx.Response(200, json={"id": 42}))
+    respx.get(f"{mf.MOLY_API_URL}/book/42.json").mock(
+        return_value=httpx.Response(200, json=_moly_book_payload(book_id=42)))
+    respx.get(f"{mf.MOLY_API_URL}/book_editions/42.json").mock(
+        return_value=httpx.Response(200, json=_moly_editions_payload()))
+
+    result = await mf.fetch_candidates("Some Book", isbn="9781234567890")
+    assert result.sources["moly"] == "ok"
+    moly = [c for c in result.candidates if c.source == "moly"]
+    assert len(moly) == 1
+
+
+@respx.mock
+async def test_moly_bad_key_returns_empty(monkeypatch):
+    """403 from moly → empty candidates, no crash."""
+    monkeypatch.setattr(settings, "moly_key", "bad_key")
+    respx.post(HC).mock(return_value=httpx.Response(200, json=_hc_payload("Test")))
+    respx.get(GB).mock(return_value=httpx.Response(200, json=_empty_gb()))
+    respx.get(OL).mock(return_value=httpx.Response(200, json=_empty_ol()))
+    respx.get(MOLY_SEARCH).mock(return_value=httpx.Response(403))
+
+    result = await mf.fetch_candidates("Test")
+    assert result.sources["moly"] == "empty"
+    moly = [c for c in result.candidates if c.source == "moly"]
+    assert len(moly) == 0
+
+
+@respx.mock
+async def test_moly_rate_limited_is_reported(monkeypatch):
+    """429 from moly → rate_limited status, other sources still deliver."""
+    monkeypatch.setattr(settings, "moly_key", "moly_test_key")
+    async def _no_sleep(_): return None
+    monkeypatch.setattr(mf.asyncio, "sleep", _no_sleep)
+
+    respx.post(HC).mock(return_value=httpx.Response(200, json=_hc_payload("Test")))
+    respx.get(GB).mock(return_value=httpx.Response(200, json=_empty_gb()))
+    respx.get(OL).mock(return_value=httpx.Response(200, json=_empty_ol()))
+    respx.get(MOLY_SEARCH).mock(return_value=httpx.Response(429))
+
+    result = await mf.fetch_candidates("Test")
+    assert result.sources["moly"] == "rate_limited"
+
+
+def test_moly_source_priority_equals_open_library():
+    """Moly shares the same priority tier as Open Library (good secondary source)."""
+    assert _SOURCE_PRIORITY["moly"] == _SOURCE_PRIORITY["open_library"]

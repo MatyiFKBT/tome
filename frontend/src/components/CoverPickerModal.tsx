@@ -26,6 +26,7 @@ const SOURCE_BADGE: Record<string, string> = {
   hardcover: 'HC',
   google_books: 'Google',
   open_library: 'OpenLib',
+  moly: 'Moly',
 }
 
 export function CoverPickerModal({ book, open, onClose, onApplied }: Props) {

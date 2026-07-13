@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     # the shared anonymous pool — fixes 429/quota failures, which hit hardest for
     # non-English (e.g. zh-TW) catalogues that lean on Google as the fallback.
     google_books_key: str | None = None
+    # Moly.hu API key (env TOME_MOLY_KEY). Hungarian book community site — best
+    # metadata source for Hungarian-language books. Requires an API key from moly.hu.
+    moly_key: str | None = None
 
     # SMTP (send-to-device)
     smtp_host: str | None = None

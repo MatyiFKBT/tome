@@ -214,6 +214,7 @@ export function WishlistModal({ onClose, onCreated }: Props) {
     hardcover: 'Hardcover',
     google_books: 'Google Books',
     open_library: 'OpenLibrary',
+    moly: 'Moly.hu',
     manual: 'Manual',
   }
 

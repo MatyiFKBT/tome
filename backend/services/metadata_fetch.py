@@ -1,6 +1,6 @@
 """
 External metadata fetching.
-Sources: Hardcover (primary), Google Books, Open Library — all queried in parallel.
+Sources: Hardcover (primary), Google Books, Open Library, Moly.hu — all queried in parallel.
 Returns a list of MetadataCandidate objects for the user to review.
 """
 import asyncio
@@ -22,13 +22,14 @@ OPEN_LIBRARY_WORK = "https://openlibrary.org{key}.json"
 OPEN_LIBRARY_COVER = "https://covers.openlibrary.org/b/id/{cover_id}-L.jpg"
 HARDCOVER_URL = "https://api.hardcover.app/v1/graphql"
 ANILIST_URL = "https://graphql.anilist.co"
+MOLY_API_URL = "https://moly.hu/api"
 
 _MAX_RESULTS = 5
 
 
 @dataclass
 class MetadataCandidate:
-    source: str          # "hardcover" | "google_books" | "open_library"
+    source: str          # "hardcover" | "google_books" | "open_library" | "anilist" | "moly"
     source_id: str       # Google volumeId or OL work key
     title: str
     author: str | None = None
@@ -167,7 +168,7 @@ async def fetch_candidates(
     language: str | None = None,
     media_hint: str | None = None,
 ) -> FetchResult:
-    """Query Hardcover, Google Books and OpenLibrary in parallel; return up to
+    """Query Hardcover, Google Books, OpenLibrary, and Moly.hu in parallel; return up to
     _MAX_RESULTS candidates, cross-source merged and relevance-ranked.
 
     Duplicates across sources are collapsed into ONE candidate whose missing
@@ -194,6 +195,9 @@ async def fetch_candidates(
         async def _al_skipped() -> tuple[list[MetadataCandidate], str]:
             return [], "skipped"
 
+        async def _moly_disabled() -> tuple[list[MetadataCandidate], str]:
+            return [], "disabled"
+
         hc_call = (
             _call_with_retry("hardcover", lambda: _hardcover(
                 client, title, author, effective_isbn, series, series_index, query_override, media_hint),
@@ -208,13 +212,20 @@ async def fetch_candidates(
             _call_with_retry("anilist", lambda: _anilist(client, al_query), cache_key=al_query)
             if hint_cls == "art" else _al_skipped()
         )
-        (hc, hc_status), (gb, gb_status), (ol, ol_status), (al, al_status) = await asyncio.gather(
+        # Moly.hu is key-gated — best source for Hungarian-language books.
+        moly_call = (
+            _call_with_retry("moly", lambda: _moly(client, query, effective_isbn),
+                             cache_key=(query, effective_isbn))
+            if settings.moly_key else _moly_disabled()
+        )
+        (hc, hc_status), (gb, gb_status), (ol, ol_status), (al, al_status), (ml, ml_status) = await asyncio.gather(
             hc_call,
             _call_with_retry("google_books", lambda: _google_books(client, query, effective_isbn),
                              cache_key=(query, effective_isbn)),
             _call_with_retry("open_library", lambda: _open_library(client, query, effective_isbn),
                              cache_key=(query, effective_isbn)),
             al_call,
+            moly_call,
         )
 
         # Series-aware fallback: when the per-book title is obscure, retry empty
@@ -263,7 +274,7 @@ async def fetch_candidates(
             if hc2:
                 hc = [*hc2, *hc]
 
-    merged = merge_candidates([*hc, *gb, *ol, *al])
+    merged = merge_candidates([*hc, *gb, *ol, *al, *ml])
     if al:
         _fill_from_anilist(merged, al)
     ranked = rank_candidates(merged, ScoreContext(
@@ -274,6 +285,8 @@ async def fetch_candidates(
     sources = {"hardcover": hc_status, "google_books": gb_status, "open_library": ol_status}
     if al_status != "skipped":
         sources["anilist"] = al_status
+    if ml_status != "disabled":
+        sources["moly"] = ml_status
     return FetchResult(
         candidates=ranked[:_MAX_RESULTS],
         query_used=hc_query,
@@ -1005,6 +1018,155 @@ async def _fetch_ol_description(client: httpx.AsyncClient, work_key: str) -> str
         pass
     return None
 
+
+# ── Moly.hu (Hungarian books) ─────────────────────────────────────────────────
+
+async def _moly(
+    client: httpx.AsyncClient,
+    query: str,
+    isbn: str | None = None,
+) -> list[MetadataCandidate]:
+    """Fetch candidates from Moly.hu JSON API.
+
+    Two-phase: search for book IDs, then fetch details + editions in parallel
+    for the top results.  Requires TOME_MOLY_KEY; returns empty when unset.
+    """
+    if not settings.moly_key:
+        return []
+
+    params: dict[str, str] = {"key": settings.moly_key}
+
+    # Phase 1: search → list of {"id": int, "title": str, ...}
+    if isbn:
+        search_url = f"{MOLY_API_URL}/book_by_isbn.json"
+        params["q"] = isbn
+        resp = await client.get(search_url, params=params)
+        if resp.status_code == 403:
+            logger.warning("Moly.hu rejected API key (HTTP 403)")
+            return []
+        if resp.status_code == 429:
+            raise RateLimited("moly")
+        resp.raise_for_status()
+        data = resp.json()
+        book_id = data.get("id")
+        if not book_id:
+            return []
+        book_ids = [book_id]
+    else:
+        search_url = f"{MOLY_API_URL}/books.json"
+        params["q"] = query
+        resp = await client.get(search_url, params=params)
+        if resp.status_code == 403:
+            logger.warning("Moly.hu rejected API key (HTTP 403)")
+            return []
+        if resp.status_code == 429:
+            raise RateLimited("moly")
+        resp.raise_for_status()
+        data = resp.json()
+        books = data.get("books", [])
+        book_ids = [b["id"] for b in books[:_MAX_RESULTS] if b.get("id")]
+
+    if not book_ids:
+        return []
+
+    # Phase 2: fetch details + editions for each book in parallel
+    async def _fetch_book_detail(bid: int) -> dict:
+        r = await client.get(f"{MOLY_API_URL}/book/{bid}.json",
+                             params={"key": settings.moly_key})
+        r.raise_for_status()
+        return r.json().get("book", {})
+
+    async def _fetch_editions(bid: int) -> list[dict]:
+        r = await client.get(f"{MOLY_API_URL}/book_editions/{bid}.json",
+                             params={"key": settings.moly_key})
+        r.raise_for_status()
+        return r.json().get("editions", [])
+
+    results = await asyncio.gather(
+        *[
+            asyncio.gather(_fetch_book_detail(bid), _fetch_editions(bid),
+                           return_exceptions=True)
+            for bid in book_ids
+        ],
+        return_exceptions=True,
+    )
+
+    candidates: list[MetadataCandidate] = []
+    for pair in results:
+        if isinstance(pair, Exception):
+            continue
+        book, editions_raw = pair
+        if isinstance(book, Exception):
+            continue
+        editions = editions_raw if isinstance(editions_raw, list) else []
+        c = _parse_moly(book, editions)
+        if _is_useful(c):
+            candidates.append(c)
+
+    return candidates
+
+
+def _parse_moly(book: dict, editions: list[dict]) -> MetadataCandidate:
+    """Parse a Moly.hu book + its editions into a MetadataCandidate.
+
+    Uses the first edition with an ISBN (if any) for edition-level fields;
+    falls back to the first edition for cover/publisher/year.
+    """
+    authors = book.get("authors", [])
+    author_str = ", ".join(a["name"] for a in authors if a.get("name")) or None
+
+    tags_raw = book.get("tags", [])
+    all_tags = [t["name"] for t in tags_raw if t.get("name")]
+
+    # Language detection from Hungarian tags ("magyar nyelvű" → "hu", etc.)
+    _LANG_MAP = {
+        "angol nyelvű": "en",
+        "német nyelvű": "de",
+        "francia nyelvű": "fr",
+        "olasz nyelvű": "it",
+        "spanyol nyelvű": "es",
+        "orosz nyelvű": "ru",
+        "török nyelvű": "tr",
+        "görög nyelvű": "el",
+        "kínai nyelvű": "zh",
+        "japán nyelvű": "ja",
+        "magyar nyelvű": "hu",
+    }
+    language = None
+    tags: list[str] = []
+    for tag in all_tags:
+        lang = _LANG_MAP.get(tag.lower().strip())
+        if lang:
+            language = language or lang
+        else:
+            tags.append(tag)
+    if not language:
+        language = "hu"  # moly.hu is predominantly Hungarian
+
+    # Pick the best edition: prefer one with an ISBN
+    best_ed = next((e for e in editions if e.get("isbn")), None) or (editions[0] if editions else {})
+
+
+    cover = best_ed.get("cover")
+    if cover and "/normal/" in cover:
+        cover = cover.replace("/normal/", "/big/")
+
+    year = best_ed.get("year")
+
+    return MetadataCandidate(
+        source="moly",
+        source_id=str(book.get("id", "")),
+        title=book.get("title", ""),
+        author=author_str,
+        description=_clean_html(book.get("description", "") or ""),
+        cover_url=cover,
+        publisher=best_ed.get("publisher"),
+        year=year if isinstance(year, int) else None,
+        page_count=None,
+        isbn=best_ed.get("isbn"),
+        language=language,
+        tags=tags[:8],
+    )
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
