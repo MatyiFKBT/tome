@@ -7,7 +7,7 @@
 # See docs/examples/ for setups specific to Unraid, etc.
 services:
   tome:
-    image: ghcr.io/bndct-devops/tome:latest
+    image: ghcr.io/matyifkbt/tome:main
     container_name: tome
     ports:
       - "8080:8080"
